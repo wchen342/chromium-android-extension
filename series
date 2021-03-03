@@ -1,0 +1,14 @@
+Extensions/base/fix-disabled-supervised-user.patch
+Extensions/base/gn.patch
+Extensions/base/src.patch
+Extensions/base/res.patch
+Extensions/open-setting-in-new-tab.patch
+Extensions/allow-select-folder.patch
+Extensions/crx-download-install-prompt.patch
+Extensions/add-chromium-webstore-extension.patch
+Extensions/fix-extension-remove-button.patch
+Extensions/extension-system-delayed-reload.patch
+Extensions/add-api-os-android.patch
+Extensions/profile-extra-parts-init.patch
+Extensions/tab-api-fix.patch
+Extensions/add-extension-menu-items.patch

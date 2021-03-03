@@ -1,0 +1,2380 @@
+From: Wengling Chen <feiyu2817@gmail.com>
+Date: Sat, 23 Jan 2021 06:48:43 +0200
+Subject: rewrite tab API with Android tab model
+
+---
+ chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelObserverJniBridge.java |    8 
+ chrome/browser/extensions/api/tabs/tabs_api.cc                                              |  347 ++++------
+ chrome/browser/extensions/api/tabs/tabs_api.h                                               |    1 
+ chrome/browser/extensions/api/tabs/tabs_event_router.cc                                     |  252 +++++--
+ chrome/browser/extensions/api/tabs/tabs_event_router.h                                      |   61 +
+ chrome/browser/extensions/api/web_navigation/web_navigation_api.cc                          |    5 
+ chrome/browser/extensions/extension_tab_util.cc                                             |  265 ++++---
+ chrome/browser/extensions/extension_tab_util.h                                              |   11 
+ chrome/browser/ui/android/tab_model/tab_model.cc                                            |    8 
+ chrome/browser/ui/android/tab_model/tab_model.h                                             |    2 
+ chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc                                 |    9 
+ chrome/browser/ui/android/tab_model/tab_model_jni_bridge.h                                  |    1 
+ chrome/browser/ui/android/tab_model/tab_model_list.cc                                       |   10 
+ chrome/browser/ui/android/tab_model/tab_model_list.h                                        |    1 
+ chrome/browser/ui/android/tab_model/tab_model_observer.cc                                   |    4 
+ chrome/browser/ui/android/tab_model/tab_model_observer.h                                    |    5 
+ chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.cc                        |   23 
+ chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.h                         |    4 
+ chrome/browser/ui/browser_navigator.cc                                                      |  108 +--
+ content/public/browser/web_contents_user_data.h                                             |    2 
+ 20 files changed, 701 insertions(+), 426 deletions(-)
+
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -15,16 +15,22 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/android/tab_android.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/extensions/api/tab_groups/tab_groups_util.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_api.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
++#include "chrome/browser/extensions/api/tabs/tabs_event_router.h"
++#include "chrome/browser/extensions/api/tabs/tabs_windows_api.h"
+ #include "chrome/browser/extensions/browser_extension_window_controller.h"
+ #include "chrome/browser/extensions/chrome_extension_function_details.h"
+ #include "chrome/browser/extensions/tab_helper.h"
+ #include "chrome/browser/platform_util.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
++#include "chrome/browser/ui/android/tab_model/tab_model.h"
++#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/browser_navigator_params.h"
+@@ -108,9 +114,9 @@ Browser* CreateBrowser(Profile* profile,
+ // take care of setting the id to TAB_ID_NONE if necessary (for
+ // example with devtools).
+ int GetTabIdForExtensions(const WebContents* web_contents) {
+-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
+-  if (browser && !ExtensionTabUtil::BrowserSupportsTabs(browser))
+-    return -1;
++//   Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
++//   if (browser && !ExtensionTabUtil::BrowserSupportsTabs(browser))
++//     return -1;
+   return sessions::SessionTabHelper::IdForTab(web_contents).id();
+ }
+ 
+@@ -196,24 +202,24 @@ base::DictionaryValue* ExtensionTabUtil:
+     window_id = *params.window_id;
+ 
+   Browser* browser = GetBrowserFromWindowID(chrome_details, window_id, error);
+-  if (!browser) {
+-    if (!params.create_browser_if_needed) {
+-      return nullptr;
+-    }
+-    browser = CreateBrowser(profile, window_id, user_gesture, error);
+-    if (!browser)
+-      return nullptr;
+-  }
++//   if (!browser) {
++//     if (!params.create_browser_if_needed) {
++//       return nullptr;
++//     }
++//     browser = CreateBrowser(profile, window_id, user_gesture, error);
++//     if (!browser)
++//       return nullptr;
++//   }
+ 
+   // Ensure the selected browser is normal.
+-  if (!browser->is_type_normal() && browser->IsAttemptingToCloseBrowser())
+-    browser = chrome::FindTabbedBrowser(
+-        profile, function->include_incognito_information());
+-  if (!browser || !browser->window()) {
+-    if (error)
+-      *error = tabs_constants::kNoCurrentWindowError;
+-    return nullptr;
+-  }
++//   if (!browser->is_type_normal() && browser->IsAttemptingToCloseBrowser())
++//     browser = chrome::FindTabbedBrowser(
++//         profile, function->include_incognito_information());
++//   if (!browser || !browser->window()) {
++//     if (error)
++//       *error = tabs_constants::kNoCurrentWindowError;
++//     return nullptr;
++//   }
+ 
+   // TODO(jstritar): Add a constant, chrome.tabs.TAB_ID_ACTIVE, that
+   // represents the active tab.
+@@ -264,20 +270,20 @@ base::DictionaryValue* ExtensionTabUtil:
+   if (url.SchemeIs(kExtensionScheme) &&
+       (!function->extension() ||
+        !IncognitoInfo::IsSplitMode(function->extension())) &&
+-      browser->profile()->IsOffTheRecord()) {
+-    Profile* profile = browser->profile()->GetOriginalProfile();
++      ProfileManager::GetActiveUserProfile()->IsOffTheRecord()) {
++    Profile* profile = ProfileManager::GetActiveUserProfile()->GetOriginalProfile();
+ 
+-    browser = chrome::FindTabbedBrowser(profile, false);
+-    if (!browser) {
+-      Browser::CreateParams params =
+-          Browser::CreateParams(Browser::TYPE_NORMAL, profile, user_gesture);
+-      browser = Browser::Create(params);
+-      if (!browser) {
+-        *error = tabs_constants::kBrowserWindowNotAllowed;
+-        return nullptr;
+-      }
+-      browser->window()->Show();
+-    }
++//     browser = chrome::FindTabbedBrowser(profile, false);
++//     if (!browser) {
++//       Browser::CreateParams params =
++//           Browser::CreateParams(Browser::TYPE_NORMAL, profile, user_gesture);
++//       browser = Browser::Create(params);
++//       if (!browser) {
++//         *error = tabs_constants::kBrowserWindowNotAllowed;
++//         return nullptr;
++//       }
++//       browser->window()->Show();
++//     }
+   }
+ 
+   if (opener_browser && browser != opener_browser) {
+@@ -292,8 +298,9 @@ base::DictionaryValue* ExtensionTabUtil:
+   int index = -1;
+   if (params.index.get())
+     index = *params.index;
+-  index = base::ClampToRange(index, -1, browser->tab_strip_model()->count());
++  index = base::ClampToRange(index, -1, TabModelList::GetCurrentTabModel()->GetTabCount());
+ 
++  // Not applicable
+   int add_types = active ? TabStripModel::ADD_ACTIVE : TabStripModel::ADD_NONE;
+   add_types |= TabStripModel::ADD_FORCE_INDEX;
+   if (pinned)
+@@ -317,15 +324,15 @@ base::DictionaryValue* ExtensionTabUtil:
+ 
+   // The tab may have been created in a different window, so make sure we look
+   // at the right tab strip.
+-  TabStripModel* tab_strip = navigate_params.browser->tab_strip_model();
+-  int new_index = tab_strip->GetIndexOfWebContents(
+-      navigate_params.navigated_or_inserted_contents);
+-  if (opener) {
+-    // Only set the opener if the opener tab is in the same tab strip as the
+-    // new tab.
+-    if (tab_strip->GetIndexOfWebContents(opener) != TabStripModel::kNoTab)
+-      tab_strip->SetOpenerOfWebContentsAt(new_index, opener);
+-  }
++//   TabModel* tab_strip = navigate_params.browser->tab_strip_model();
++//   int new_index = tab_strip->GetIndexOfWebContents(
++//       navigate_params.navigated_or_inserted_contents);
++//   if (opener) {
++//    // Only set the opener if the opener tab is in the same tab strip as the
++//    // new tab.
++//     if (tab_strip->GetIndexOfWebContents(opener) != TabStripModel::kNoTab)
++//       tab_strip->SetOpenerOfWebContentsAt(new_index, opener);
++//   }
+ 
+   if (active)
+     navigate_params.navigated_or_inserted_contents->SetInitialFocus();
+@@ -336,9 +343,12 @@ base::DictionaryValue* ExtensionTabUtil:
+           navigate_params.navigated_or_inserted_contents);
+ 
+   // Return data about the newly created tab.
++  // Always launch from same model.
++  // TODO: Maybe need fix
+   return ExtensionTabUtil::CreateTabObject(
+              navigate_params.navigated_or_inserted_contents, scrub_tab_behavior,
+-             function->extension(), tab_strip, new_index)
++             function->extension(), TabModelList::GetCurrentTabModel(),
++             TabModelList::GetCurrentTabModel()->GetTabCount())
+       ->ToValue()
+       .release();
+ }
+@@ -386,14 +396,14 @@ int ExtensionTabUtil::GetWindowIdOfTab(c
+ 
+ // static
+ std::string ExtensionTabUtil::GetBrowserWindowTypeText(const Browser& browser) {
+-  if (browser.is_type_devtools())
+-    return tabs_constants::kWindowTypeValueDevTools;
++//   if (browser.is_type_devtools())
++//     return tabs_constants::kWindowTypeValueDevTools;
+   // TODO(crbug.com/990158): We return 'popup' for both popup and app since
+   // chrome.windows.create({type: 'popup'}) uses
+   // Browser::CreateParams::CreateForApp.
+-  if (browser.is_type_popup() || browser.is_type_app() ||
+-      browser.is_type_app_popup())
+-    return tabs_constants::kWindowTypeValuePopup;
++//   if (browser.is_type_popup() || browser.is_type_app() ||
++//       browser.is_type_app_popup())
++//     return tabs_constants::kWindowTypeValuePopup;
+   return tabs_constants::kWindowTypeValueNormal;
+ }
+ 
+@@ -402,27 +412,21 @@ std::unique_ptr<api::tabs::Tab> Extensio
+     WebContents* contents,
+     ScrubTabBehavior scrub_tab_behavior,
+     const Extension* extension,
+-    TabStripModel* tab_strip,
++    TabModel* tab_strip,
+     int tab_index) {
+   if (!tab_strip)
+-    ExtensionTabUtil::GetTabStripModel(contents, &tab_strip, &tab_index);
++    ExtensionTabUtil::GetTabModel(contents, &tab_strip, &tab_index);
+   auto tab_object = std::make_unique<api::tabs::Tab>();
+   tab_object->id = std::make_unique<int>(GetTabIdForExtensions(contents));
+   tab_object->index = tab_index;
+   tab_object->window_id = GetWindowIdOfTab(contents);
+   tab_object->status = GetLoadingStatus(contents);
+-  tab_object->active = tab_strip && tab_index == tab_strip->active_index();
+-  tab_object->selected = tab_strip && tab_index == tab_strip->active_index();
+-  tab_object->highlighted = tab_strip && tab_strip->IsTabSelected(tab_index);
+-  tab_object->pinned = tab_strip && tab_strip->IsTabPinned(tab_index);
++  tab_object->active = tab_strip && tab_index == tab_strip->GetActiveIndex();
++  tab_object->selected = tab_strip && tab_index == tab_strip->GetActiveIndex();
++  tab_object->highlighted = tab_strip && tab_strip->GetActiveIndex();
++  tab_object->pinned = false;
+ 
+   tab_object->group_id = -1;
+-  if (tab_strip) {
+-    base::Optional<tab_groups::TabGroupId> group =
+-        tab_strip->GetTabGroupForTab(tab_index);
+-    if (group.has_value())
+-      tab_object->group_id = tab_groups_util::GetGroupId(group.value());
+-  }
+ 
+   auto* audible_helper = RecentlyAudibleHelper::FromWebContents(contents);
+   bool audible = false;
+@@ -452,7 +456,7 @@ std::unique_ptr<api::tabs::Tab> Extensio
+ 
+   tab_object->muted_info = CreateMutedInfo(contents);
+   tab_object->incognito = contents->GetBrowserContext()->IsOffTheRecord();
+-  gfx::Size contents_size = contents->GetContainerBounds().size();
++  gfx::Size contents_size = contents->GetSize();
+   tab_object->width = std::make_unique<int>(contents_size.width());
+   tab_object->height = std::make_unique<int>(contents_size.height());
+ 
+@@ -472,13 +476,14 @@ std::unique_ptr<api::tabs::Tab> Extensio
+     tab_object->fav_icon_url =
+         std::make_unique<std::string>(visible_entry->GetFavicon().url.spec());
+   }
+-  if (tab_strip) {
+-    WebContents* opener = tab_strip->GetOpenerOfWebContentsAt(tab_index);
+-    if (opener) {
+-      tab_object->opener_tab_id =
+-          std::make_unique<int>(GetTabIdForExtensions(opener));
+-    }
+-  }
++//   Don't have this
++//   if (tab_strip) {
++//     WebContents* opener = tab_strip->GetOpenerOfWebContentsAt(tab_index);
++//     if (opener) {
++//       tab_object->opener_tab_id =
++//           std::make_unique<int>(GetTabIdForExtensions(opener));
++//     }
++//   }
+ 
+   ScrubTabForExtension(extension, contents, tab_object.get(),
+                        scrub_tab_behavior);
+@@ -490,9 +495,11 @@ std::unique_ptr<base::ListValue> Extensi
+     const Extension* extension,
+     Feature::Context context) {
+   std::unique_ptr<base::ListValue> tab_list(new base::ListValue());
+-  TabStripModel* tab_strip = browser->tab_strip_model();
+-  for (int i = 0; i < tab_strip->count(); ++i) {
++  TabModel* tab_strip = TabModelList::GetCurrentTabModel();
++  for (int i = 0; i < tab_strip->GetTabCount(); ++i) {
+     WebContents* web_contents = tab_strip->GetWebContentsAt(i);
++    if (!web_contents)
++        continue;
+     ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
+         ExtensionTabUtil::GetScrubTabBehavior(extension, context, web_contents);
+     tab_list->Append(CreateTabObject(web_contents, scrub_tab_behavior,
+@@ -512,44 +519,57 @@ ExtensionTabUtil::CreateWindowValueForEx
+     Feature::Context context) {
+   auto result = std::make_unique<base::DictionaryValue>();
+ 
+-  result->SetInteger(tabs_constants::kIdKey, browser.session_id().id());
++  // This assumes extension will always get focus of currently opening tab
++  // Get last selected tab. If none, return currently active tab
++  TabModel* tab_model = TabModelList::GetCurrentTabModel();
++  TabAndroid* tab = tab_model->GetTabForId(
++          TabsWindowsAPI::Get(ProfileManager::GetActiveUserProfile())
++          ->tabs_event_router()->GetLastTabId());
++  if (!tab)
++      tab = tab_model->GetTabAt(tab_model->GetActiveIndex());
++  // If still nullptr, return nullptr
++  result->SetInteger(tabs_constants::kIdKey, sessions::SessionTabHelper::IdForWindowContainingTab(
++//     TabModelList::GetCurrentTabModel()->GetActiveWebContents()
++      tab ? tab->web_contents() : nullptr
++  ).id());
+   result->SetString(tabs_constants::kWindowTypeKey,
+                     GetBrowserWindowTypeText(browser));
+-  ui::BaseWindow* window = browser.window();
+-  result->SetBoolean(tabs_constants::kFocusedKey, window->IsActive());
+-  const Profile* profile = browser.profile();
++//   ui::BaseWindow* window = browser.window();
++  result->SetBoolean(tabs_constants::kFocusedKey, true);
++  const Profile* profile = ProfileManager::GetActiveUserProfile();
+   result->SetBoolean(tabs_constants::kIncognitoKey, profile->IsOffTheRecord());
+   result->SetBoolean(
+       tabs_constants::kAlwaysOnTopKey,
+-      window->GetZOrderLevel() == ui::ZOrderLevel::kFloatingWindow);
++      false);
+ 
+   std::string window_state;
+-  if (window->IsMinimized()) {
++  if (false) {
+     window_state = tabs_constants::kShowStateValueMinimized;
+-  } else if (window->IsFullscreen()) {
++  } else if (false) {
+     window_state = tabs_constants::kShowStateValueFullscreen;
+-    if (platform_util::IsBrowserLockedFullscreen(&browser))
++    if (false)
+       window_state = tabs_constants::kShowStateValueLockedFullscreen;
+-  } else if (window->IsMaximized()) {
++  } else if (false) {
+     window_state = tabs_constants::kShowStateValueMaximized;
+   } else {
+     window_state = tabs_constants::kShowStateValueNormal;
+   }
+   result->SetString(tabs_constants::kShowStateKey, window_state);
+ 
+-  gfx::Rect bounds;
+-  if (window->IsMinimized())
+-    bounds = window->GetRestoredBounds();
+-  else
+-    bounds = window->GetBounds();
+-  result->SetInteger(tabs_constants::kLeftKey, bounds.x());
+-  result->SetInteger(tabs_constants::kTopKey, bounds.y());
+-  result->SetInteger(tabs_constants::kWidthKey, bounds.width());
+-  result->SetInteger(tabs_constants::kHeightKey, bounds.height());
++//   gfx::Rect bounds;
++//   if (window->IsMinimized())
++//     bounds = window->GetRestoredBounds();
++//   else
++//     bounds = window->GetBounds();
++  // TODO: Return fixed window size. May need fix
++  result->SetInteger(tabs_constants::kLeftKey, 0);
++  result->SetInteger(tabs_constants::kTopKey, 0);
++  result->SetInteger(tabs_constants::kWidthKey, 800);
++  result->SetInteger(tabs_constants::kHeightKey, 600);
+ 
+   if (populate_tab_behavior == kPopulateTabs)
+     result->Set(tabs_constants::kTabsKey,
+-                CreateTabList(&browser, extension, context));
++                CreateTabList(nullptr, extension, context));
+ 
+   return result;
+ }
+@@ -650,20 +670,29 @@ void ExtensionTabUtil::ScrubTabForExtens
+ }
+ 
+ // static
+-bool ExtensionTabUtil::GetTabStripModel(const WebContents* web_contents,
+-                                        TabStripModel** tab_strip_model,
++bool ExtensionTabUtil::GetTabModel(const WebContents* web_contents,
++                                        TabModel** tab_model,
+                                         int* tab_index) {
+   DCHECK(web_contents);
+-  DCHECK(tab_strip_model);
++  DCHECK(tab_model);
+   DCHECK(tab_index);
+ 
+-  for (auto* browser : *BrowserList::GetInstance()) {
+-    TabStripModel* tab_strip = browser->tab_strip_model();
+-    int index = tab_strip->GetIndexOfWebContents(web_contents);
+-    if (index != -1) {
+-      *tab_strip_model = tab_strip;
+-      *tab_index = index;
+-      return true;
++  for (size_t i = 0; i < TabModelList::size(); ++i) {
++    TabModel* tab_model_it = TabModelList::get(i);
++    if (tab_model_it->IsActiveModel()) {
++      int index = -1;
++      for (int i = 0; i < tab_model_it->GetTabCount(); i++) {
++        if (web_contents == tab_model_it->GetWebContentsAt(i)) {
++          index = i;
++          break;
++        }
++      }
++      if (index != -1) {
++        if (tab_model)
++          *tab_model = tab_model_it;
++        *tab_index = index;
++        return true;
++      }
+     }
+   }
+ 
+@@ -673,10 +702,9 @@ bool ExtensionTabUtil::GetTabStripModel(
+ bool ExtensionTabUtil::GetDefaultTab(Browser* browser,
+                                      WebContents** contents,
+                                      int* tab_id) {
+-  DCHECK(browser);
+   DCHECK(contents);
+ 
+-  *contents = browser->tab_strip_model()->GetActiveWebContents();
++  *contents = TabModelList::GetCurrentTabModel()->GetActiveWebContents();
+   if (*contents) {
+     if (tab_id)
+       *tab_id = GetTabId(*contents);
+@@ -691,7 +719,7 @@ bool ExtensionTabUtil::GetTabById(int ta
+                                   content::BrowserContext* browser_context,
+                                   bool include_incognito,
+                                   Browser** browser,
+-                                  TabStripModel** tab_strip,
++                                  TabModel** tab_strip,
+                                   WebContents** contents,
+                                   int* tab_index) {
+   if (tab_id == api::tabs::TAB_ID_NONE)
+@@ -701,22 +729,22 @@ bool ExtensionTabUtil::GetTabById(int ta
+       include_incognito && profile->HasPrimaryOTRProfile()
+           ? profile->GetPrimaryOTRProfile()
+           : nullptr;
+-  for (auto* target_browser : *BrowserList::GetInstance()) {
+-    if (target_browser->profile() == profile ||
+-        target_browser->profile() == incognito_profile) {
+-      TabStripModel* target_tab_strip = target_browser->tab_strip_model();
+-      for (int i = 0; i < target_tab_strip->count(); ++i) {
+-        WebContents* target_contents = target_tab_strip->GetWebContentsAt(i);
++  // TODO: Profile is not checked
++  for (int i = 0; i < TabModelList::size(); ++i) {
++    if (TabModelList::get(i)->IsActiveModel()) {
++      TabModel* tab_model = TabModelList::get(i);
++      for (int j = 0; j < tab_model->GetTabCount(); ++j) {
++        WebContents* target_contents = tab_model->GetWebContentsAt(j);
+         if (sessions::SessionTabHelper::IdForTab(target_contents).id() ==
+-            tab_id) {
++             tab_id) {
+           if (browser)
+-            *browser = target_browser;
++            *browser = nullptr;
+           if (tab_strip)
+-            *tab_strip = target_tab_strip;
++            *tab_strip = tab_model;
+           if (contents)
+             *contents = target_contents;
+           if (tab_index)
+-            *tab_index = i;
++            *tab_index = j;
+           return true;
+         }
+       }
+@@ -746,14 +774,12 @@ ExtensionTabUtil::GetAllActiveWebContent
+       include_incognito && profile->HasPrimaryOTRProfile()
+           ? profile->GetPrimaryOTRProfile()
+           : nullptr;
+-  for (auto* target_browser : *BrowserList::GetInstance()) {
+-    if (target_browser->profile() == profile ||
+-        target_browser->profile() == incognito_profile) {
+-      TabStripModel* target_tab_strip = target_browser->tab_strip_model();
++  if (ProfileManager::GetActiveUserProfile() == profile ||
++        ProfileManager::GetActiveUserProfile() == incognito_profile) {
++      TabModel* target_tab_strip = TabModelList::GetCurrentTabModel();
+ 
+       active_contents.push_back(target_tab_strip->GetActiveWebContents());
+     }
+-  }
+ 
+   return active_contents;
+ }
+@@ -943,8 +969,9 @@ api::tabs::TabStatus ExtensionTabUtil::G
+     return api::tabs::TAB_STATUS_LOADING;
+ 
+   // Anything that isn't backed by a process is considered unloaded.
+-  if (!HasValidMainFrameProcess(contents))
+-    return api::tabs::TAB_STATUS_UNLOADED;
++  // Doesn't apply on Android
++//   if (!HasValidMainFrameProcess(contents))
++//     return api::tabs::TAB_STATUS_UNLOADED;
+ 
+   // Otherwise its considered loaded.
+   return api::tabs::TAB_STATUS_COMPLETE;
+--- a/chrome/browser/extensions/extension_tab_util.h
++++ b/chrome/browser/extensions/extension_tab_util.h
+@@ -17,6 +17,7 @@
+ class Browser;
+ class ChromeExtensionFunctionDetails;
+ class GURL;
++class TabModel;
+ class TabStripModel;
+ class ExtensionFunction;
+ 
+@@ -123,7 +124,7 @@ class ExtensionTabUtil {
+       content::WebContents* web_contents,
+       ScrubTabBehavior scrub_tab_behavior,
+       const Extension* extension,
+-      TabStripModel* tab_strip,
++      TabModel* tab_strip,
+       int tab_index);
+ 
+   // Creates a DictionaryValue representing the window for the given |browser|,
+@@ -167,9 +168,9 @@ class ExtensionTabUtil {
+                                    api::tabs::Tab* tab,
+                                    ScrubTabBehavior scrub_tab_behavior);
+ 
+-  // Gets the |tab_strip_model| and |tab_index| for the given |web_contents|.
+-  static bool GetTabStripModel(const content::WebContents* web_contents,
+-                               TabStripModel** tab_strip_model,
++  // Gets the |tab_model| and |tab_index| for the given |web_contents|.
++  static bool GetTabModel(const content::WebContents* web_contents,
++                               TabModel** tab_model,
+                                int* tab_index);
+   static bool GetDefaultTab(Browser* browser,
+                             content::WebContents** contents,
+@@ -180,7 +181,7 @@ class ExtensionTabUtil {
+                          content::BrowserContext* browser_context,
+                          bool include_incognito,
+                          Browser** browser,
+-                         TabStripModel** tab_strip,
++                         TabModel** tab_strip,
+                          content::WebContents** contents,
+                          int* tab_index);
+   static bool GetTabById(int tab_id,
+--- a/chrome/browser/ui/android/tab_model/tab_model_list.cc
++++ b/chrome/browser/ui/android/tab_model/tab_model_list.cc
+@@ -107,6 +107,16 @@ TabModel* TabModelList::FindTabModelWith
+   return nullptr;
+ }
+ 
++TabModel* TabModelList::GetCurrentTabModel() {
++  for (size_t i = 0; i < TabModelList::size(); ++i) {
++    TabModel* tab_model = TabModelList::get(i);
++    if (tab_model->IsActiveModel())
++      return tab_model;
++  }
++
++  return nullptr;
++}
++
+ bool TabModelList::IsOffTheRecordSessionActive() {
+   // TODO(https://crbug.com/1023759): This function should return true for
+   // incognito CCTs.
+--- a/chrome/browser/ui/android/tab_model/tab_model_list.h
++++ b/chrome/browser/ui/android/tab_model/tab_model_list.h
+@@ -42,6 +42,7 @@ class TabModelList {
+       content::WebContents* web_contents);
+   static TabModel* GetTabModelForTabAndroid(TabAndroid* tab_android);
+   static TabModel* FindTabModelWithId(SessionID desired_id);
++  static TabModel* GetCurrentTabModel();
+   static bool IsOffTheRecordSessionActive();
+ 
+   static const_iterator begin();
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -43,10 +43,13 @@
+ #include "chrome/browser/platform_util.h"
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/resource_coordinator/tab_manager.h"
+ #include "chrome/browser/translate/chrome_translate_client.h"
+ #include "chrome/browser/ui/apps/chrome_app_delegate.h"
++#include "chrome/browser/ui/android/tab_model/tab_model.h"
++#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_finder.h"
+@@ -174,7 +177,7 @@ bool GetTabById(int tab_id,
+                 content::BrowserContext* context,
+                 bool include_incognito,
+                 Browser** browser,
+-                TabStripModel** tab_strip,
++                TabModel** tab_strip,
+                 content::WebContents** contents,
+                 int* tab_index,
+                 std::string* error_message) {
+@@ -206,11 +209,7 @@ content::WebContents* GetTabsAPIDefaultW
+                nullptr /* ignore TabStripModel* output */, &web_contents,
+                nullptr /* ignore int tab_index output */, error);
+   } else {
+-    Browser* browser =
+-        ChromeExtensionFunctionDetails(function).GetCurrentBrowser();
+-    if (!browser)
+-      *error = tabs_constants::kNoCurrentWindowError;
+-    else if (!ExtensionTabUtil::GetDefaultTab(browser, &web_contents, nullptr))
++    if (!ExtensionTabUtil::GetDefaultTab(nullptr, &web_contents, nullptr))
+       *error = tabs_constants::kNoSelectedTabError;
+   }
+   return web_contents;
+@@ -250,6 +249,7 @@ ui::WindowShowState ConvertToWindowShowS
+ 
+ bool IsValidStateForWindowsCreateFunction(
+     const windows::Create::Params::CreateData* create_data) {
++  return false;
+   if (!create_data)
+     return true;
+ 
+@@ -282,7 +282,7 @@ std::unique_ptr<api::tabs::Tab> CreateTa
+     WebContents* contents,
+     const Extension* extension,
+     Feature::Context context,
+-    TabStripModel* tab_strip,
++    TabModel* tab_strip,
+     int tab_index) {
+   ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
+       ExtensionTabUtil::GetScrubTabBehavior(extension, context, contents);
+@@ -300,7 +300,7 @@ int MoveTabToWindow(ExtensionFunction* f
+                     int new_index,
+                     std::string* error) {
+   Browser* source_browser = nullptr;
+-  TabStripModel* source_tab_strip = nullptr;
++  TabModel* source_tab_strip = nullptr;
+   int source_index = -1;
+   if (!GetTabById(tab_id, function->browser_context(),
+                   function->include_incognito_information(), &source_browser,
+@@ -308,42 +308,41 @@ int MoveTabToWindow(ExtensionFunction* f
+     return -1;
+   }
+ 
+-  if (!target_browser->window()->IsTabStripEditable()) {
++  if (false) {
+     *error = tabs_constants::kTabStripNotEditableError;
+     return -1;
+   }
+ 
+   // TODO(crbug.com/990158): Rather than calling is_type_normal(), should
+   // this call SupportsWindowFeature(Browser::FEATURE_TABSTRIP)?
+-  if (!target_browser->is_type_normal()) {
++  if (false) {
+     *error = tabs_constants::kCanOnlyMoveTabsWithinNormalWindowsError;
+     return -1;
+   }
+ 
+-  if (target_browser->profile() != source_browser->profile()) {
++  if (false) {
+     *error = tabs_constants::kCanOnlyMoveTabsWithinSameProfileError;
+     return -1;
+   }
+ 
+-  std::unique_ptr<content::WebContents> web_contents =
+-      source_tab_strip->DetachWebContentsAt(source_index);
+-  if (!web_contents) {
+-    *error = ErrorUtils::FormatErrorMessage(tabs_constants::kTabNotFoundError,
+-                                            base::NumberToString(tab_id));
+-    return -1;
+-  }
++//   std::unique_ptr<content::WebContents> web_contents =
++//       source_tab_strip->DetachWebContentsAt(source_index);
++//   if (!web_contents) {
++//     *error = ErrorUtils::FormatErrorMessage(tabs_constants::kTabNotFoundError,
++//                                             base::NumberToString(tab_id));
++//     return -1;
++//   }
+ 
+-  TabStripModel* target_tab_strip = target_browser->tab_strip_model();
++  TabModel* target_tab_strip = TabModelList::GetCurrentTabModel();
+ 
+   // Clamp move location to the last position.
+   // This is ">" because it can append to a new index position.
+   // -1 means set the move location to the last position.
+   int target_index = new_index;
+-  if (target_index > target_tab_strip->count() || target_index < 0)
+-    target_index = target_tab_strip->count();
++  if (target_index > target_tab_strip->GetTabCount() || target_index < 0)
++    target_index = target_tab_strip->GetTabCount();
+ 
+-  return target_tab_strip->InsertWebContentsAt(
+-      target_index, std::move(web_contents), TabStripModel::ADD_NONE);
++  return target_index+1;
+ }
+ 
+ }  // namespace
+@@ -443,8 +442,8 @@ ExtensionFunction::ResponseAction Window
+         break;  // Use focused window.
+     }
+   }
+-  if (!browser)
+-    return RespondNow(Error(tabs_constants::kNoLastFocusedWindowError));
++//   if (!browser)
++//     return RespondNow(Error(tabs_constants::kNoLastFocusedWindowError));
+ 
+   ExtensionTabUtil::PopulateTabBehavior populate_tab_behavior =
+       extractor.populate_tabs() ? ExtensionTabUtil::kPopulateTabs
+@@ -532,7 +531,7 @@ ExtensionFunction::ResponseAction Window
+       windows::Create::Params::Create(*args_));
+   EXTENSION_FUNCTION_VALIDATE(params);
+   std::vector<GURL> urls;
+-  TabStripModel* source_tab_strip = NULL;
++  TabModel* source_tab_strip = NULL;
+   int tab_index = -1;
+ 
+   windows::Create::Params::CreateData* create_data = params->create_data.get();
+@@ -581,10 +580,10 @@ ExtensionFunction::ResponseAction Window
+       return RespondNow(Error(std::move(error)));
+     }
+ 
+-    if (!source_browser->window()->IsTabStripEditable())
++    if (false)
+       return RespondNow(Error(tabs_constants::kTabStripNotEditableError));
+ 
+-    if (source_browser->profile() != window_profile)
++    if (false)
+       return RespondNow(
+           Error(tabs_constants::kCanOnlyMoveTabsWithinSameProfileError));
+   }
+@@ -693,16 +692,16 @@ ExtensionFunction::ResponseAction Window
+   WebContents* contents = NULL;
+   // Move the tab into the created window only if it's an empty popup or it's
+   // a tabbed window.
+-  if (window_type == Browser::TYPE_NORMAL || urls.empty()) {
+-    if (source_tab_strip) {
+-      std::unique_ptr<content::WebContents> detached_tab =
+-          source_tab_strip->DetachWebContentsAt(tab_index);
+-      contents = detached_tab.get();
+-      TabStripModel* target_tab_strip = new_window->tab_strip_model();
+-      target_tab_strip->InsertWebContentsAt(
+-          urls.size(), std::move(detached_tab), TabStripModel::ADD_NONE);
+-    }
+-  }
++//   if (window_type == Browser::TYPE_NORMAL || urls.empty()) {
++//     if (source_tab_strip) {
++//       std::unique_ptr<content::WebContents> detached_tab =
++//           source_tab_strip->DetachWebContentsAt(tab_index);
++//       contents = detached_tab.get();
++//       TabStripModel* target_tab_strip = new_window->tab_strip_model();
++//       target_tab_strip->InsertWebContentsAt(
++//           urls.size(), std::move(detached_tab), TabStripModel::ADD_NONE);
++//     }
++//   }
+   // Create a new tab if the created window is still empty. Don't create a new
+   // tab when it is intended to create an empty popup.
+   if (!contents && urls.empty() && window_type == Browser::TYPE_NORMAL) {
+@@ -925,13 +924,13 @@ ExtensionFunction::ResponseAction TabsGe
+   if (!GetBrowserFromWindowID(this, window_id, &browser, &error))
+     return RespondNow(Error(std::move(error)));
+ 
+-  TabStripModel* tab_strip = browser->tab_strip_model();
++  TabModel* tab_strip = TabModelList::GetCurrentTabModel();
+   WebContents* contents = tab_strip->GetActiveWebContents();
+   if (!contents)
+     return RespondNow(Error(tabs_constants::kNoSelectedTabError));
+   return RespondNow(ArgumentList(tabs::Get::Results::Create(
+       *CreateTabObjectHelper(contents, extension(), source_context_type(),
+-                             tab_strip, tab_strip->active_index()))));
++                             tab_strip, tab_strip->GetActiveIndex()))));
+ }
+ 
+ ExtensionFunction::ResponseAction TabsGetAllInWindowFunction::Run() {
+@@ -999,51 +998,52 @@ ExtensionFunction::ResponseAction TabsQu
+ 
+   std::unique_ptr<base::ListValue> result(new base::ListValue());
+   Profile* profile = Profile::FromBrowserContext(browser_context());
+-  Browser* last_active_browser =
+-      chrome::FindAnyBrowser(profile, include_incognito_information());
+-  Browser* current_browser =
+-      ChromeExtensionFunctionDetails(this).GetCurrentBrowser();
+-  for (auto* browser : *BrowserList::GetInstance()) {
+-    if (!profile->IsSameOrParent(browser->profile()))
++//   Browser* last_active_browser =
++//       chrome::FindAnyBrowser(profile, include_incognito_information());
++//   Browser* current_browser =
++//       ChromeExtensionFunctionDetails(this).GetCurrentBrowser();
++  for (size_t h = 0; h < TabModelList::size(); ++h) {
++    TabModel* tab_model = TabModelList::get(h);
++    if (!profile->IsSameOrParent(ProfileManager::GetActiveUserProfile()))
+       continue;
+ 
+-    if (!browser->window())
+-      continue;
++//     if (!browser->window())
++//       continue;
+ 
+-    if (!include_incognito_information() && profile != browser->profile())
++    if (!include_incognito_information() && profile != ProfileManager::GetActiveUserProfile())
+       continue;
+ 
+-    if (!browser->extension_window_controller()->IsVisibleToTabsAPIForExtension(
+-            extension(), false /*allow_dev_tools_windows*/)) {
+-      continue;
+-    }
++//     if (!browser->extension_window_controller()->IsVisibleToTabsAPIForExtension(
++//             extension(), false /*allow_dev_tools_windows*/)) {
++//       continue;
++//     }
++
++//     if (window_id >= 0 && window_id != ExtensionTabUtil::GetWindowId(browser))
++//       continue;
++
++//     if (window_id == extension_misc::kCurrentWindowId &&
++//         browser != current_browser) {
++//       continue;
++//     }
++
++//     if (!MatchesBool(params->query_info.current_window.get(),
++//                      browser == current_browser)) {
++//       continue;
++//     }
++
++//     if (!MatchesBool(params->query_info.last_focused_window.get(),
++//                      browser == last_active_browser)) {
++//       continue;
++//     }
++
++//     if (!window_type.empty() &&
++//         window_type !=
++//             browser->extension_window_controller()->GetWindowTypeText()) {
++//       continue;
++//     }
+ 
+-    if (window_id >= 0 && window_id != ExtensionTabUtil::GetWindowId(browser))
+-      continue;
+-
+-    if (window_id == extension_misc::kCurrentWindowId &&
+-        browser != current_browser) {
+-      continue;
+-    }
+-
+-    if (!MatchesBool(params->query_info.current_window.get(),
+-                     browser == current_browser)) {
+-      continue;
+-    }
+-
+-    if (!MatchesBool(params->query_info.last_focused_window.get(),
+-                     browser == last_active_browser)) {
+-      continue;
+-    }
+-
+-    if (!window_type.empty() &&
+-        window_type !=
+-            browser->extension_window_controller()->GetWindowTypeText()) {
+-      continue;
+-    }
+-
+-    TabStripModel* tab_strip = browser->tab_strip_model();
+-    for (int i = 0; i < tab_strip->count(); ++i) {
++    TabModel* tab_strip = TabModelList::GetCurrentTabModel();
++    for (int i = 0; i < tab_strip->GetTabCount(); ++i) {
+       WebContents* web_contents = tab_strip->GetWebContentsAt(i);
+ 
+       if (index > -1 && i != index)
+@@ -1052,34 +1052,34 @@ ExtensionFunction::ResponseAction TabsQu
+       if (!web_contents)
+         continue;
+ 
+-      if (!MatchesBool(params->query_info.highlighted.get(),
+-                       tab_strip->IsTabSelected(i))) {
+-        continue;
+-      }
++//       if (!MatchesBool(params->query_info.highlighted.get(),
++//                        tab_strip->IsTabSelected(i))) {
++//         continue;
++//       }
+ 
+       if (!MatchesBool(params->query_info.active.get(),
+-                       i == tab_strip->active_index())) {
++                       i == tab_strip->GetActiveIndex())) {
+         continue;
+       }
+ 
+-      if (!MatchesBool(params->query_info.pinned.get(),
+-                       tab_strip->IsTabPinned(i))) {
+-        continue;
+-      }
+-
+-      if (group_id.has_value()) {
+-        base::Optional<tab_groups::TabGroupId> group =
+-            tab_strip->GetTabGroupForTab(index);
+-        if (group_id.value() == -1) {
+-          if (group.has_value())
+-            continue;
+-        } else if (!group.has_value()) {
+-          continue;
+-        } else if (tab_groups_util::GetGroupId(group.value()) !=
+-                   group_id.value()) {
+-          continue;
+-        }
+-      }
++//       if (!MatchesBool(params->query_info.pinned.get(),
++//                        tab_strip->IsTabPinned(i))) {
++//         continue;
++//       }
++
++//       if (group_id.has_value()) {
++//         base::Optional<tab_groups::TabGroupId> group =
++//             tab_strip->GetTabGroupForTab(index);
++//         if (group_id.value() == -1) {
++//           if (group.has_value())
++//             continue;
++//         } else if (!group.has_value()) {
++//           continue;
++//         } else if (tab_groups_util::GetGroupId(group.value()) !=
++//                    group_id.value()) {
++//           continue;
++//         }
++//       }
+ 
+       auto* audible_helper =
+           RecentlyAudibleHelper::FromWebContents(web_contents);
+@@ -1088,19 +1088,19 @@ ExtensionFunction::ResponseAction TabsQu
+         continue;
+       }
+ 
+-      auto* tab_lifecycle_unit_external =
+-          resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
+-              web_contents);
+-
+-      if (!MatchesBool(params->query_info.discarded.get(),
+-                       tab_lifecycle_unit_external->IsDiscarded())) {
+-        continue;
+-      }
+-
+-      if (!MatchesBool(params->query_info.auto_discardable.get(),
+-                       tab_lifecycle_unit_external->IsAutoDiscardable())) {
+-        continue;
+-      }
++//       auto* tab_lifecycle_unit_external =
++//           resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
++//               web_contents);
++
++//       if (!MatchesBool(params->query_info.discarded.get(),
++//                        tab_lifecycle_unit_external->IsDiscarded())) {
++//         continue;
++//       }
++
++//       if (!MatchesBool(params->query_info.auto_discardable.get(),
++//                        tab_lifecycle_unit_external->IsAutoDiscardable())) {
++//         continue;
++//       }
+ 
+       if (!MatchesBool(params->query_info.muted.get(),
+                        web_contents->IsAudioMuted())) {
+@@ -1184,7 +1184,7 @@ ExtensionFunction::ResponseAction TabsDu
+   int tab_id = params->tab_id;
+ 
+   Browser* browser = NULL;
+-  TabStripModel* tab_strip = NULL;
++  TabModel* tab_strip = NULL;
+   int tab_index = -1;
+   std::string error;
+   if (!GetTabById(tab_id, browser_context(), include_incognito_information(),
+@@ -1198,9 +1198,9 @@ ExtensionFunction::ResponseAction TabsDu
+ 
+   // Duplicated tab may not be in the same window as the original, so find
+   // the window and the tab.
+-  TabStripModel* new_tab_strip = NULL;
++  TabModel* new_tab_strip = NULL;
+   int new_tab_index = -1;
+-  ExtensionTabUtil::GetTabStripModel(new_contents,
++  ExtensionTabUtil::GetTabModel(new_contents,
+                                      &new_tab_strip,
+                                      &new_tab_index);
+   if (!new_tab_strip || new_tab_index == -1) {
+@@ -1217,7 +1217,7 @@ ExtensionFunction::ResponseAction TabsGe
+   EXTENSION_FUNCTION_VALIDATE(params.get());
+   int tab_id = params->tab_id;
+ 
+-  TabStripModel* tab_strip = NULL;
++  TabModel* tab_strip = NULL;
+   WebContents* contents = NULL;
+   int tab_index = -1;
+   std::string error;
+@@ -1335,7 +1335,7 @@ ExtensionFunction::ResponseAction TabsUp
+   }
+ 
+   int tab_index = -1;
+-  TabStripModel* tab_strip = NULL;
++  TabModel* tab_strip = NULL;
+   Browser* browser = nullptr;
+   std::string error;
+   if (!GetTabById(tab_id, browser_context(), include_incognito_information(),
+@@ -1375,25 +1375,25 @@ ExtensionFunction::ResponseAction TabsUp
+     active = *params->update_properties.active;
+ 
+   if (active) {
+-    if (tab_strip->active_index() != tab_index) {
+-      tab_strip->ActivateTabAt(tab_index);
++    if (tab_strip->GetActiveIndex() != tab_index) {
++      tab_strip->SetActiveIndex(tab_index);
+       DCHECK_EQ(contents, tab_strip->GetActiveWebContents());
+     }
+   }
+ 
+-  if (params->update_properties.highlighted.get()) {
+-    bool highlighted = *params->update_properties.highlighted;
+-    if (highlighted != tab_strip->IsTabSelected(tab_index))
+-      tab_strip->ToggleSelectionAt(tab_index);
+-  }
+-
+-  if (params->update_properties.pinned.get()) {
+-    bool pinned = *params->update_properties.pinned;
+-    tab_strip->SetTabPinned(tab_index, pinned);
+-
+-    // Update the tab index because it may move when being pinned.
+-    tab_index = tab_strip->GetIndexOfWebContents(contents);
+-  }
++//   if (params->update_properties.highlighted.get()) {
++//     bool highlighted = *params->update_properties.highlighted;
++//     if (highlighted != tab_strip->IsTabSelected(tab_index))
++//       tab_strip->ToggleSelectionAt(tab_index);
++//   }
++
++//   if (params->update_properties.pinned.get()) {
++//     bool pinned = *params->update_properties.pinned;
++//     tab_strip->SetTabPinned(tab_index, pinned);
++//
++//    // Update the tab index because it may move when being pinned.
++//     tab_index = tab_strip->GetIndexOfWebContents(contents);
++//   }
+ 
+   if (params->update_properties.muted.get() &&
+       !chrome::SetTabAudioMuted(contents, *params->update_properties.muted,
+@@ -1415,20 +1415,20 @@ ExtensionFunction::ResponseAction TabsUp
+           tabs_constants::kTabNotFoundError, base::NumberToString(opener_id))));
+     }
+ 
+-    if (tab_strip->GetIndexOfWebContents(opener_contents) ==
+-        TabStripModel::kNoTab) {
+-      return RespondNow(
+-          Error("Tab opener must be in the same window as the updated tab."));
+-    }
+-    tab_strip->SetOpenerOfWebContentsAt(tab_index, opener_contents);
++//     if (tab_strip->GetIndexOfWebContents(opener_contents) ==
++//         TabStripModel::kNoTab) {
++//       return RespondNow(
++//           Error("Tab opener must be in the same window as the updated tab."));
++//     }
++//     tab_strip->SetOpenerOfWebContentsAt(tab_index, opener_contents);
+   }
+ 
+-  if (params->update_properties.auto_discardable.get()) {
+-    bool state = *params->update_properties.auto_discardable;
+-    resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
+-        web_contents_)
+-        ->SetAutoDiscardable(state);
+-  }
++//   if (params->update_properties.auto_discardable.get()) {
++//     bool state = *params->update_properties.auto_discardable;
++//     resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
++//         web_contents_)
++//         ->SetAutoDiscardable(state);
++//   }
+ 
+   return RespondNow(GetResult());
+ }
+@@ -1550,7 +1550,7 @@ bool TabsMoveFunction::MoveTab(int tab_i
+                                int* window_id,
+                                std::string* error) {
+   Browser* source_browser = nullptr;
+-  TabStripModel* source_tab_strip = nullptr;
++  TabModel* source_tab_strip = nullptr;
+   WebContents* contents = nullptr;
+   int tab_index = -1;
+   if (!GetTabById(tab_id, browser_context(), include_incognito_information(),
+@@ -1560,12 +1560,12 @@ bool TabsMoveFunction::MoveTab(int tab_i
+   }
+ 
+   // Don't let the extension move the tab if the user is dragging tabs.
+-  if (!source_browser->window()->IsTabStripEditable()) {
++  if (false) {
+     *error = tabs_constants::kTabStripNotEditableError;
+     return false;
+   }
+ 
+-  if (window_id && *window_id != ExtensionTabUtil::GetWindowIdOfTab(contents)) {
++  if (false && *window_id != ExtensionTabUtil::GetWindowIdOfTab(contents)) {
+     Browser* target_browser = nullptr;
+     if (!GetBrowserFromWindowID(this, *window_id, &target_browser, error))
+       return false;
+@@ -1580,10 +1580,6 @@ bool TabsMoveFunction::MoveTab(int tab_i
+     if (has_callback()) {
+       content::WebContents* web_contents =
+           target_browser->tab_strip_model()->GetWebContentsAt(inserted_index);
+-      tab_values->Append(CreateTabObjectHelper(
+-                             web_contents, extension(), source_context_type(),
+-                             target_browser->tab_strip_model(), inserted_index)
+-                             ->ToValue());
+     }
+ 
+     // Insert the tabs one after another.
+@@ -1596,12 +1592,12 @@ bool TabsMoveFunction::MoveTab(int tab_i
+   // Clamp move location to the last position.
+   // This is ">=" because the move must be to an existing location.
+   // -1 means set the move location to the last position.
+-  if (*new_index >= source_tab_strip->count() || *new_index < 0)
+-    *new_index = source_tab_strip->count() - 1;
++  if (*new_index >= source_tab_strip->GetTabCount() || *new_index < 0)
++    *new_index = source_tab_strip->GetTabCount() - 1;
+ 
+-  if (*new_index != tab_index)
+-    *new_index =
+-        source_tab_strip->MoveWebContentsAt(tab_index, *new_index, false);
++//   if (*new_index != tab_index)
++//     *new_index =
++//         source_tab_strip->MoveWebContentsAt(tab_index, *new_index, false);
+ 
+   if (has_callback()) {
+     tab_values->Append(CreateTabObjectHelper(contents, extension(),
+@@ -1691,18 +1687,18 @@ ExtensionFunction::ResponseAction TabsRe
+ }
+ 
+ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
+-  Browser* browser = NULL;
++//   Browser* browser = NULL;
+   WebContents* contents = NULL;
+   if (!GetTabById(tab_id, browser_context(), include_incognito_information(),
+-                  &browser, nullptr, &contents, nullptr, error)) {
++                  nullptr, nullptr, &contents, nullptr, error)) {
+     return false;
+   }
+ 
+   // Don't let the extension remove a tab if the user is dragging tabs around.
+-  if (!browser->window()->IsTabStripEditable()) {
+-    *error = tabs_constants::kTabStripNotEditableError;
+-    return false;
+-  }
++//   if (!browser->window()->IsTabStripEditable()) {
++//     *error = tabs_constants::kTabStripNotEditableError;
++//     return false;
++//   }
+   // The tab might not immediately close after calling Close() below, so we
+   // should wait until WebContentsDestroyed is called before responding.
+   web_contents_destroyed_observers_.push_back(
+@@ -1877,20 +1873,18 @@ ExtensionFunction::ResponseAction TabsUn
+ 
+ bool TabsUngroupFunction::UngroupTab(int tab_id, std::string* error) {
+   Browser* browser = nullptr;
+-  TabStripModel* tab_strip = nullptr;
++  TabModel* tab_strip = nullptr;
+   int tab_index = -1;
+   if (!GetTabById(tab_id, browser_context(), include_incognito_information(),
+                   &browser, &tab_strip, nullptr, &tab_index, error)) {
+     return false;
+   }
+ 
+-  if (!browser->window()->IsTabStripEditable()) {
++  if (false) {
+     *error = tabs_constants::kTabStripNotEditableError;
+     return false;
+   }
+ 
+-  tab_strip->RemoveFromGroup({tab_index});
+-
+   return true;
+ }
+ 
+@@ -1918,7 +1912,7 @@ WebContents* TabsCaptureVisibleTabFuncti
+   if (!GetBrowserFromWindowID(chrome_details_, window_id, &browser, error))
+     return nullptr;
+ 
+-  WebContents* contents = browser->tab_strip_model()->GetActiveWebContents();
++  WebContents* contents =  TabModelList::GetCurrentTabModel()->GetActiveWebContents();
+   if (!contents) {
+     *error = "No active web contents to capture";
+     return nullptr;
+@@ -2032,10 +2026,7 @@ ExtensionFunction::ResponseAction TabsDe
+     if (!browser || !contents)
+       return RespondNow(Error(kUnknownErrorDoNotUse));
+   } else {
+-    browser = ChromeExtensionFunctionDetails(this).GetCurrentBrowser();
+-    if (!browser)
+-      return RespondNow(Error(tabs_constants::kNoCurrentWindowError));
+-    contents = browser->tab_strip_model()->GetActiveWebContents();
++    contents =  TabModelList::GetCurrentTabModel()->GetActiveWebContents();
+     if (!contents)
+       return RespondNow(Error(tabs_constants::kNoSelectedTabError));
+   }
+@@ -2133,13 +2124,9 @@ ExecuteCodeFunction::InitResult ExecuteC
+   // If the tab ID wasn't given then it needs to be converted to the
+   // currently active tab's ID.
+   if (tab_id == -1) {
+-    Browser* browser = chrome_details_.GetCurrentBrowser();
+-    // Can happen during shutdown.
+-    if (!browser)
+-      return set_init_result_error(tabs_constants::kNoCurrentWindowError);
+     content::WebContents* web_contents = NULL;
+     // Can happen during shutdown.
+-    if (!ExtensionTabUtil::GetDefaultTab(browser, &web_contents, &tab_id))
++    if (!ExtensionTabUtil::GetDefaultTab(nullptr, &web_contents, &tab_id))
+       return set_init_result_error(tabs_constants::kNoTabInBrowserWindowError);
+   }
+ 
+@@ -2224,7 +2211,7 @@ ScriptExecutor* ExecuteCodeInTabFunction
+   bool success = GetTabById(execute_tab_id_, browser_context(),
+                             include_incognito_information(), &browser, nullptr,
+                             &contents, nullptr, error) &&
+-                 contents && browser;
++                 contents;
+ 
+   if (!success)
+     return nullptr;
+--- a/chrome/browser/extensions/api/tabs/tabs_api.h
++++ b/chrome/browser/extensions/api/tabs/tabs_api.h
+@@ -23,6 +23,7 @@
+ 
+ class GURL;
+ class SkBitmap;
++class TabModel;
+ class TabStripModel;
+ namespace content {
+ class WebContents;
+--- a/chrome/browser/extensions/api/web_navigation/web_navigation_api.cc
++++ b/chrome/browser/extensions/api/web_navigation/web_navigation_api.cc
+@@ -355,10 +355,9 @@ void WebNavigationTabObserver::DidOpenRe
+   if (!router)
+     return;
+ 
+-  TabStripModel* ignored_tab_strip_model = nullptr;
+   int ignored_tab_index = -1;
+-  bool new_contents_is_present_in_tabstrip = ExtensionTabUtil::GetTabStripModel(
+-      new_contents, &ignored_tab_strip_model, &ignored_tab_index);
++  bool new_contents_is_present_in_tabstrip = ExtensionTabUtil::GetTabModel(
++      new_contents, nullptr, &ignored_tab_index);
+   router->RecordNewWebContents(
+       web_contents(), source_render_frame_host->GetProcess()->GetID(),
+       source_render_frame_host->GetRoutingID(), url, new_contents,
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router.cc
+@@ -18,6 +18,10 @@
+ #include "chrome/browser/extensions/browser_extension_window_controller.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/android/tab_android.h"
++#include "chrome/browser/ui/android/tab_model/tab_model.h"
++#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_list.h"
+ #include "chrome/browser/ui/recently_audible_helper.h"
+@@ -48,6 +52,11 @@ bool WillDispatchTabUpdatedEvent(
+     const Extension* extension,
+     Event* event,
+     const base::DictionaryValue* listener_filter) {
++  DCHECK(contents);
++  // TODO: temporary fix for null web contents.
++  if (!contents)
++    return false;
++
+   ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
+       ExtensionTabUtil::GetScrubTabBehavior(extension, target_context,
+                                             contents);
+@@ -77,6 +86,11 @@ bool WillDispatchTabCreatedEvent(WebCont
+                                  const Extension* extension,
+                                  Event* event,
+                                  const base::DictionaryValue* listener_filter) {
++  DCHECK(contents);
++  // TODO: temporary fix for null web contents.
++  if (!contents)
++    return false;
++
+   event->event_args->Clear();
+   ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
+       ExtensionTabUtil::GetScrubTabBehavior(extension, target_context,
+@@ -93,13 +107,14 @@ bool WillDispatchTabCreatedEvent(WebCont
+ }  // namespace
+ 
+ TabsEventRouter::TabEntry::TabEntry(TabsEventRouter* router,
+-                                    content::WebContents* contents)
+-    : WebContentsObserver(contents),
++                                    TabAndroid* tab)
++    : WebContentsObserver(tab->web_contents()),
++      tab_(tab),
+       complete_waiting_on_load_(false),
+       was_audible_(false),
+-      was_muted_(contents->IsAudioMuted()),
++      was_muted_(tab->web_contents()->IsAudioMuted()),
+       router_(router) {
+-  auto* audible_helper = RecentlyAudibleHelper::FromWebContents(contents);
++  auto* audible_helper = RecentlyAudibleHelper::FromWebContents(tab->web_contents());
+   was_audible_ = audible_helper->WasRecentlyAudible();
+ }
+ 
+@@ -159,7 +174,7 @@ void TabsEventRouter::TabEntry::WebConte
+   // happens in the case of a devtools WebContents that is opened in window,
+   // docked, then closed.
+   // Warning: |this| will be deleted after this call.
+-  router_->UnregisterForTabNotifications(web_contents());
++  router_->UnregisterForTabNotifications(tab_);
+ }
+ 
+ TabsEventRouter::TabsEventRouter(Profile* profile)
+@@ -169,11 +184,19 @@ TabsEventRouter::TabsEventRouter(Profile
+   BrowserList::AddObserver(this);
+   browser_tab_strip_tracker_.Init();
+ 
++  // Same as in auto_fetch_page_load_watcher
++  base::ThreadTaskRunnerHandle::Get()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&TabsEventRouter::RegisterTabObserver, GetWeakPtr()));
++
+   tab_manager_scoped_observer_.Add(g_browser_process->GetTabManager());
+ }
+ 
+ TabsEventRouter::~TabsEventRouter() {
+   BrowserList::RemoveObserver(this);
++  if (observed_tab_model_)
++      observed_tab_model_->RemoveObserver(this);
++  TabModelList::RemoveObserver(this);
+ }
+ 
+ bool TabsEventRouter::ShouldTrackBrowser(Browser* browser) {
+@@ -189,6 +212,7 @@ void TabsEventRouter::OnBrowserSetLastAc
+   }
+ }
+ 
++/*
+ void TabsEventRouter::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
+@@ -238,9 +262,9 @@ void TabsEventRouter::OnTabStripModelCha
+                              selection.new_model.active());
+   }
+ 
+-  if (selection.selection_changed()) {
+-    DispatchTabSelectionChanged(tab_strip_model, selection.old_model);
+-  }
++//   if (selection.selection_changed()) {
++//     DispatchTabSelectionChanged(tab_strip_model, selection.old_model);
++//   }
+ }
+ 
+ void TabsEventRouter::TabChangedAt(WebContents* contents,
+@@ -269,6 +293,114 @@ void TabsEventRouter::TabGroupedStateCha
+   changed_property_names.insert(tabs_constants::kGroupIdKey);
+   DispatchTabUpdatedEvent(contents, std::move(changed_property_names));
+ }
++*/
++
++void TabsEventRouter::RegisterTabObserver() {
++    if (!TabModelList::empty()) {
++        OnTabModelAdded();
++    } else {
++        TabModelList::AddObserver(this);
++    }
++}
++
++void TabsEventRouter::OnTabModelAdded() {
++    if (observed_tab_model_)
++        return;
++    // The assumption is that there can be at most one non-off-the-record tab
++    // model. Observe it if it exists.
++    for (auto model = TabModelList::begin(); model != TabModelList::end();
++            ++model) {
++        if (!(*model)->IsOffTheRecord()) {
++            observed_tab_model_ = *model;
++            observed_tab_model_->AddObserver(this);
++            break;
++        }
++    }
++}
++
++void TabsEventRouter::OnTabModelRemoved() {
++    if (!observed_tab_model_)
++        return;
++
++    for (auto remaining_model = TabModelList::begin();
++            remaining_model != TabModelList::end(); ++remaining_model) {
++        if (observed_tab_model_ == *remaining_model)
++            return;
++    }
++    observed_tab_model_ = nullptr;
++}
++
++// On Android, tab selection is a different concept from tab_strip_model
++void TabsEventRouter::DidSelectTab(TabAndroid* tab,
++                 TabModel::TabSelectionType type, int last_id) {
++  LOG(INFO) << "tabs_event_router.cc: DidSelectTab: entry";
++  WebContents* contents = tab->web_contents();
++  DCHECK(contents);
++  if (!contents) {
++    LOG(INFO) << "tabs_event_router.cc: DidSelectTab: web_contents: nullptr";
++    return;
++  }
++  if (last_id != tab->GetAndroidId())
++      last_tab_id_ = last_id;
++  if (!GetTabEntry(tab)) {
++    TabModel* tab_model = TabModelList::GetTabModelForTabAndroid(tab);
++    DispatchTabInsertedAt(tab_model,
++                          tab,
++                          tab_model->GetIndexForWebContents(contents),
++                          tab_model->GetActiveWebContents() == contents);
++  } else {
++    // If the tab is already registered, do nothing
++  }
++}
++
++void TabsEventRouter::DidAddTab(TabAndroid* tab,
++                 TabModel::TabLaunchType type) {
++  LOG(INFO) << "tabs_event_router.cc: DidAddTab: entry";
++  DCHECK(tab->web_contents());
++//   if (!tab->web_contents()) {
++//     LOG(INFO) << "tabs_event_router.cc: DidAddTab: web_contents: nullptr";
++//     return;
++//   }
++  TabModel* tab_model = TabModelList::GetTabModelForTabAndroid(tab);
++  DispatchTabInsertedAt(tab_model,
++                        tab,
++                        tab_model->GetIndexForWebContents(tab->web_contents()),
++                        tab_model->GetActiveWebContents() == tab->web_contents());
++}
++
++void TabsEventRouter::WillCloseTab(TabAndroid* tab, bool animate) {
++  LOG(INFO) << "tabs_event_router.cc: WillCloseTab: entry";
++  TabModel* tab_model = TabModelList::GetTabModelForTabAndroid(tab);
++  DispatchTabClosingAt(tab_model,
++                       tab,
++                       tab_model->GetIndexForWebContents(tab->web_contents()));
++}
++
++void TabsEventRouter::TabRemoved(TabAndroid* tab) {
++  LOG(INFO) << "tabs_event_router.cc: TabRemoved: entry";
++  TabModel* tab_model = TabModelList::GetTabModelForTabAndroid(tab);
++  DispatchTabDetachedAt(tab,
++                        tab_model->GetIndexForWebContents(tab->web_contents()),
++                        tab_model->GetActiveWebContents() == tab->web_contents());
++}
++
++void TabsEventRouter::DidMoveTab(TabAndroid* tab, int new_index, int old_index) {
++  LOG(INFO) << "tabs_event_router.cc: DidMoveTab: entry";
++  DispatchTabMoved(tab, old_index, new_index);
++}
++
++void TabsEventRouter::RestoreCompleted() {
++  LOG(INFO) << "tabs_event_router.cc: RestoreCompleted: entry";
++  TabModel* tab_model = TabModelList::GetCurrentTabModel();
++  for (int i = 0; i < tab_model->GetTabCount(); ++i) {
++    DCHECK(tab_model->GetTabAt(i));
++    DidAddTab(tab_model->GetTabAt(i), TabModel::TabLaunchType::FROM_RESTORE);
++  }
++}
++
++int TabsEventRouter::GetLastTabId() {
++    return last_tab_id_;
++}
+ 
+ void TabsEventRouter::OnZoomChanged(
+     const ZoomController::ZoomChangedEventData& data) {
+@@ -330,17 +462,18 @@ void TabsEventRouter::OnAutoDiscardableS
+   DispatchTabUpdatedEvent(contents, std::move(changed_property_names));
+ }
+ 
+-void TabsEventRouter::DispatchTabInsertedAt(TabStripModel* tab_strip_model,
+-                                            WebContents* contents,
++void TabsEventRouter::DispatchTabInsertedAt(TabModel* tab_strip_model,
++                                            TabAndroid* tab,
+                                             int index,
+                                             bool active) {
+-  if (!GetTabEntry(contents)) {
++    WebContents* contents = tab->web_contents();
++  if (!GetTabEntry(tab)) {
+     // We've never seen this tab, send create event as long as we're not in the
+     // constructor.
+     if (browser_tab_strip_tracker_.is_processing_initial_browsers())
+-      RegisterForTabNotifications(contents);
++      RegisterForTabNotifications(tab);
+     else
+-      TabCreatedAt(contents, index, active);
++      TabCreatedAt(tab, index, active);
+     return;
+   }
+ 
+@@ -357,15 +490,16 @@ void TabsEventRouter::DispatchTabInserte
+                    std::make_unique<Value>(index));
+   args->Append(std::move(object_args));
+ 
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  Profile* profile = GetProfileFromBrowserContext(contents);
+   DispatchEvent(profile, events::TABS_ON_ATTACHED,
+                 api::tabs::OnAttached::kEventName, std::move(args),
+                 EventRouter::USER_GESTURE_UNKNOWN);
+ }
+ 
+-void TabsEventRouter::DispatchTabClosingAt(TabStripModel* tab_strip_model,
+-                                           WebContents* contents,
++void TabsEventRouter::DispatchTabClosingAt(TabModel* tab_strip_model,
++                                           TabAndroid* tab,
+                                            int index) {
++  WebContents* contents = tab->web_contents();
+   int tab_id = ExtensionTabUtil::GetTabId(contents);
+ 
+   std::unique_ptr<base::ListValue> args(new base::ListValue);
+@@ -376,21 +510,22 @@ void TabsEventRouter::DispatchTabClosing
+   object_args->SetInteger(tabs_constants::kWindowIdKey,
+                           ExtensionTabUtil::GetWindowIdOfTab(contents));
+   object_args->SetBoolean(tabs_constants::kWindowClosing,
+-                          tab_strip_model->closing_all());
++                          false);
+   args->Append(std::move(object_args));
+ 
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  Profile* profile = GetProfileFromBrowserContext(contents);
+   DispatchEvent(profile, events::TABS_ON_REMOVED,
+                 api::tabs::OnRemoved::kEventName, std::move(args),
+                 EventRouter::USER_GESTURE_UNKNOWN);
+ 
+-  UnregisterForTabNotifications(contents);
++  UnregisterForTabNotifications(tab);
+ }
+ 
+-void TabsEventRouter::DispatchTabDetachedAt(WebContents* contents,
++void TabsEventRouter::DispatchTabDetachedAt(TabAndroid* tab,
+                                             int index,
+                                             bool was_active) {
+-  if (!GetTabEntry(contents)) {
++  WebContents* contents = tab->web_contents();
++  if (!GetTabEntry(tab)) {
+     // The tab was removed. Don't send detach event.
+     return;
+   }
+@@ -407,7 +542,7 @@ void TabsEventRouter::DispatchTabDetache
+                    std::make_unique<Value>(index));
+   args->Append(std::move(object_args));
+ 
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  Profile* profile = GetProfileFromBrowserContext(contents);
+   DispatchEvent(profile, events::TABS_ON_DETACHED,
+                 api::tabs::OnDetached::kEventName, std::move(args),
+                 EventRouter::USER_GESTURE_UNKNOWN);
+@@ -416,6 +551,7 @@ void TabsEventRouter::DispatchTabDetache
+ void TabsEventRouter::DispatchActiveTabChanged(WebContents* old_contents,
+                                                WebContents* new_contents,
+                                                int index) {
++  NOTREACHED();
+   auto args = std::make_unique<base::ListValue>();
+   int tab_id = ExtensionTabUtil::GetTabId(new_contents);
+   args->AppendInteger(tab_id);
+@@ -485,9 +621,10 @@ void TabsEventRouter::DispatchTabSelecti
+                 EventRouter::USER_GESTURE_UNKNOWN);
+ }
+ 
+-void TabsEventRouter::DispatchTabMoved(WebContents* contents,
++void TabsEventRouter::DispatchTabMoved(TabAndroid* tab,
+                                        int from_index,
+                                        int to_index) {
++  WebContents* contents = tab->web_contents();
+   std::unique_ptr<base::ListValue> args(new base::ListValue);
+   args->AppendInteger(ExtensionTabUtil::GetTabId(contents));
+ 
+@@ -502,7 +639,7 @@ void TabsEventRouter::DispatchTabMoved(W
+                    std::make_unique<Value>(to_index));
+   args->Append(std::move(object_args));
+ 
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  Profile* profile = GetProfileFromBrowserContext(contents);
+   DispatchEvent(profile, events::TABS_ON_MOVED, api::tabs::OnMoved::kEventName,
+                 std::move(args), EventRouter::USER_GESTURE_UNKNOWN);
+ }
+@@ -510,6 +647,7 @@ void TabsEventRouter::DispatchTabMoved(W
+ void TabsEventRouter::DispatchTabReplacedAt(WebContents* old_contents,
+                                             WebContents* new_contents,
+                                             int index) {
++  NOTREACHED();
+   // Notify listeners that the next tabs closing or being added are due to
+   // WebContents being swapped.
+   const int new_tab_id = ExtensionTabUtil::GetTabId(new_contents);
+@@ -522,16 +660,17 @@ void TabsEventRouter::DispatchTabReplace
+                 events::TABS_ON_REPLACED, api::tabs::OnReplaced::kEventName,
+                 std::move(args), EventRouter::USER_GESTURE_UNKNOWN);
+ 
+-  UnregisterForTabNotifications(old_contents);
+-
+-  if (!GetTabEntry(new_contents))
+-    RegisterForTabNotifications(new_contents);
++//   UnregisterForTabNotifications(old_contents);
++//
++//   if (!GetTabEntry(new_contents))
++//     RegisterForTabNotifications(new_contents);
+ }
+ 
+-void TabsEventRouter::TabCreatedAt(WebContents* contents,
++void TabsEventRouter::TabCreatedAt(TabAndroid* tab,
+                                    int index,
+                                    bool active) {
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  WebContents* contents = tab->web_contents();
++  Profile* profile = GetProfileFromBrowserContext(contents);
+   std::unique_ptr<base::ListValue> args(new base::ListValue);
+   auto event = std::make_unique<Event>(events::TABS_ON_CREATED,
+                                        api::tabs::OnCreated::kEventName,
+@@ -541,7 +680,14 @@ void TabsEventRouter::TabCreatedAt(WebCo
+       base::BindRepeating(&WillDispatchTabCreatedEvent, contents, active);
+   EventRouter::Get(profile)->BroadcastEvent(std::move(event));
+ 
+-  RegisterForTabNotifications(contents);
++  RegisterForTabNotifications(tab);
++}
++
++Profile* TabsEventRouter::GetProfileFromBrowserContext(WebContents* contents) {
++  if (contents)
++    return Profile::FromBrowserContext(contents->GetBrowserContext());
++  else
++    return ProfileManager::GetActiveUserProfile();
+ }
+ 
+ void TabsEventRouter::TabUpdated(TabEntry* entry,
+@@ -594,6 +740,9 @@ void TabsEventRouter::DispatchTabUpdated
+     const std::set<std::string> changed_property_names) {
+   DCHECK(!changed_property_names.empty());
+   DCHECK(contents);
++  // TODO: temporary fix for null web contents.
++  if (!contents)
++    return;
+ 
+   // The state of the tab (as seen from the extension point of view) has
+   // changed.  Send a notification to the extension.
+@@ -608,7 +757,7 @@ void TabsEventRouter::DispatchTabUpdated
+ 
+   // Third arg: An object containing the state of the tab. Filled in by
+   // WillDispatchTabUpdatedEvent.
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  Profile* profile = GetProfileFromBrowserContext(contents);
+ 
+   auto event = std::make_unique<Event>(events::TABS_ON_UPDATED,
+                                        api::tabs::OnUpdated::kEventName,
+@@ -620,32 +769,43 @@ void TabsEventRouter::DispatchTabUpdated
+   EventRouter::Get(profile)->BroadcastEvent(std::move(event));
+ }
+ 
+-void TabsEventRouter::RegisterForTabNotifications(WebContents* contents) {
+-  favicon_scoped_observer_.Add(
+-      favicon::ContentFaviconDriver::FromWebContents(contents));
++void TabsEventRouter::RegisterForTabNotifications(TabAndroid* tab) {
++  // Do not register if web content hasn't been initialized. This happens when Android has just restored the activity.
++  if (!tab->web_contents())
++    return;
++
++//  favicon_scoped_observer_.Add(
++//      favicon::ContentFaviconDriver::FromWebContents(contents));
+ 
+-  ZoomController::FromWebContents(contents)->AddObserver(this);
++//   ZoomController::FromWebContents(contents)->AddObserver(this);
+ 
+-  int tab_id = ExtensionTabUtil::GetTabId(contents);
++//   int tab_id = ExtensionTabUtil::GetTabId(contents);
++  // Use Android Tab ID instead. It is also unique and preserves between sessions.
++  int tab_id = tab->GetAndroidId();
+   DCHECK(tab_entries_.find(tab_id) == tab_entries_.end());
+-  tab_entries_[tab_id] = std::make_unique<TabEntry>(this, contents);
++  tab_entries_[tab_id] = std::make_unique<TabEntry>(this, tab);
+ }
+ 
+-void TabsEventRouter::UnregisterForTabNotifications(WebContents* contents) {
+-  favicon_scoped_observer_.Remove(
+-      favicon::ContentFaviconDriver::FromWebContents(contents));
++void TabsEventRouter::UnregisterForTabNotifications(TabAndroid* tab) {
++//  favicon_scoped_observer_.Remove(
++//      favicon::ContentFaviconDriver::FromWebContents(contents));
+ 
+-  ZoomController::FromWebContents(contents)->RemoveObserver(this);
++//   ZoomController::FromWebContents(contents)->RemoveObserver(this);
+ 
+-  int tab_id = ExtensionTabUtil::GetTabId(contents);
++//   int tab_id = ExtensionTabUtil::GetTabId(contents);
++  int tab_id = tab->GetAndroidId();
+   int removed_count = tab_entries_.erase(tab_id);
+-  DCHECK_GT(removed_count, 0);
++//   DCHECK_GT(removed_count, 0);    // No longer apply since Android can restore closed pages
+ }
+ 
+-TabsEventRouter::TabEntry* TabsEventRouter::GetTabEntry(WebContents* contents) {
+-  const auto it = tab_entries_.find(ExtensionTabUtil::GetTabId(contents));
++TabsEventRouter::TabEntry* TabsEventRouter::GetTabEntry(TabAndroid* tab) {
++  const auto it = tab_entries_.find(tab->GetAndroidId());
+ 
+   return it == tab_entries_.end() ? nullptr : it->second.get();
+ }
+ 
++base::WeakPtr<TabsEventRouter> TabsEventRouter::GetWeakPtr() {
++  return weak_ptr_factory_.GetWeakPtr();
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router.h
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router.h
+@@ -10,10 +10,13 @@
+ #include <string>
+ 
+ #include "base/macros.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/scoped_observer.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_api.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_observer.h"
+ #include "chrome/browser/resource_coordinator/tab_manager.h"
++#include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
++#include "chrome/browser/ui/android/tab_model/tab_model_list_observer.h"
+ #include "chrome/browser/ui/browser_list_observer.h"
+ #include "chrome/browser/ui/browser_tab_strip_tracker.h"
+ #include "chrome/browser/ui/browser_tab_strip_tracker_delegate.h"
+@@ -24,6 +27,8 @@
+ #include "content/public/browser/web_contents_observer.h"
+ #include "extensions/browser/event_router.h"
+ 
++class TabAndroid;
++
+ namespace content {
+ class WebContents;
+ }
+@@ -35,6 +40,8 @@ namespace extensions {
+ // TabsEventRouter will only route events from windows/tabs within a profile to
+ // extension processes in the same profile.
+ class TabsEventRouter : public TabStripModelObserver,
++                        public TabModelListObserver,
++                        public TabModelObserver,
+                         public BrowserTabStripTrackerDelegate,
+                         public BrowserListObserver,
+                         public favicon::FaviconDriverObserver,
+@@ -50,6 +57,7 @@ class TabsEventRouter : public TabStripM
+   // BrowserListObserver:
+   void OnBrowserSetLastActive(Browser* browser) override;
+ 
++/*
+   // TabStripModelObserver:
+   void OnTabStripModelChanged(
+       TabStripModel* tab_strip_model,
+@@ -65,6 +73,23 @@ class TabsEventRouter : public TabStripM
+   void TabGroupedStateChanged(base::Optional<tab_groups::TabGroupId> group,
+                               content::WebContents* contents,
+                               int index) override;
++*/
++
++  //TabModelListObserver
++  void RegisterTabObserver();
++  void OnTabModelAdded() override;
++  void OnTabModelRemoved() override;
++
++  // TabModelObserver:
++  void DidSelectTab(TabAndroid* tab,
++                 TabModel::TabSelectionType type, int last_id) override;
++  void DidAddTab(TabAndroid* tab,
++                 TabModel::TabLaunchType type) override;
++  void WillCloseTab(TabAndroid* tab, bool animate) override;
++  void TabRemoved(TabAndroid* tab) override;
++  void DidMoveTab(TabAndroid* tab, int new_index, int old_index) override;
++  void RestoreCompleted() override;
++  int GetLastTabId();
+ 
+   // ZoomObserver:
+   void OnZoomChanged(
+@@ -86,14 +111,14 @@ class TabsEventRouter : public TabStripM
+ 
+  private:
+   // Methods called from OnTabStripModelChanged.
+-  void DispatchTabInsertedAt(TabStripModel* tab_strip_model,
+-                             content::WebContents* contents,
++  void DispatchTabInsertedAt(TabModel* tab_strip_model,
++                             TabAndroid* tab,
+                              int index,
+                              bool active);
+-  void DispatchTabClosingAt(TabStripModel* tab_strip_model,
+-                            content::WebContents* contents,
++  void DispatchTabClosingAt(TabModel* tab_strip_model,
++                            TabAndroid* tab,
+                             int index);
+-  void DispatchTabDetachedAt(content::WebContents* contents,
++  void DispatchTabDetachedAt(TabAndroid* tab,
+                              int index,
+                              bool was_active);
+   void DispatchActiveTabChanged(content::WebContents* old_contents,
+@@ -101,7 +126,7 @@ class TabsEventRouter : public TabStripM
+                                 int index);
+   void DispatchTabSelectionChanged(TabStripModel* tab_strip_model,
+                                    const ui::ListSelectionModel& old_model);
+-  void DispatchTabMoved(content::WebContents* contents,
++  void DispatchTabMoved(TabAndroid* tab,
+                         int from_index,
+                         int to_index);
+   void DispatchTabReplacedAt(content::WebContents* old_contents,
+@@ -110,7 +135,10 @@ class TabsEventRouter : public TabStripM
+ 
+   // "Synthetic" event. Called from DispatchTabInsertedAt if new tab is
+   // detected.
+-  void TabCreatedAt(content::WebContents* contents, int index, bool active);
++  void TabCreatedAt(TabAndroid* tab, int index, bool active);
++
++  // Helper function for getting profile from browser context. It deals with null web contents
++  Profile* GetProfileFromBrowserContext(content::WebContents* contents);
+ 
+   // Internal processing of tab updated events. Intended to be called when
+   // there's any changed property.
+@@ -138,10 +166,13 @@ class TabsEventRouter : public TabStripM
+ 
+   // Register ourselves to receive the various notifications we are interested
+   // in for a tab. Also create tab entry to observe web contents notifications.
+-  void RegisterForTabNotifications(content::WebContents* contents);
++  void RegisterForTabNotifications(TabAndroid* tab);
+ 
+   // Removes notifications and tab entry added in RegisterForTabNotifications.
+-  void UnregisterForTabNotifications(content::WebContents* contents);
++  void UnregisterForTabNotifications(TabAndroid* tab);
++
++  // For TabModelListObserver
++  base::WeakPtr<TabsEventRouter> GetWeakPtr();
+ 
+   // Maintain some information about known tabs, so we can:
+   //
+@@ -155,7 +186,7 @@ class TabsEventRouter : public TabStripM
+    public:
+     // Create a TabEntry associated with, and tracking state changes to,
+     // |contents|.
+-    TabEntry(TabsEventRouter* router, content::WebContents* contents);
++    TabEntry(TabsEventRouter* router, TabAndroid* tab);
+ 
+     // Indicate via a list of property names if a tab is loading based on its
+     // WebContents. Whether the state has changed or not is used to determine if
+@@ -176,6 +207,9 @@ class TabsEventRouter : public TabStripM
+     void WebContentsDestroyed() override;
+ 
+    private:
++     // Use tab instead of web contents
++    TabAndroid* tab_;
++
+     // Whether we are waiting to fire the 'complete' status change. This will
+     // occur the first time the WebContents stops loading after the
+     // NAV_ENTRY_COMMITTED was fired. The tab may go back into and out of the
+@@ -196,7 +230,7 @@ class TabsEventRouter : public TabStripM
+ 
+   // Gets the TabEntry for the given |contents|. Returns TabEntry* if found,
+   // nullptr if not.
+-  TabEntry* GetTabEntry(content::WebContents* contents);
++  TabEntry* GetTabEntry(TabAndroid* tab);
+ 
+   using TabEntryMap = std::map<int, std::unique_ptr<TabEntry>>;
+   TabEntryMap tab_entries_;
+@@ -209,6 +243,11 @@ class TabsEventRouter : public TabStripM
+ 
+   BrowserTabStripTracker browser_tab_strip_tracker_;
+ 
++  TabModel* observed_tab_model_ = nullptr;
++  base::WeakPtrFactory<TabsEventRouter> weak_ptr_factory_{this};
++
++  int last_tab_id_;
++
+   ScopedObserver<resource_coordinator::TabManager,
+                  resource_coordinator::TabLifecycleObserver>
+       tab_manager_scoped_observer_{this};
+--- a/chrome/browser/ui/android/tab_model/tab_model.cc
++++ b/chrome/browser/ui/android/tab_model/tab_model.cc
+@@ -45,6 +45,14 @@ sessions::LiveTabContext* TabModel::GetL
+   return live_tab_context_.get();
+ }
+ 
++int TabModel::GetIndexForWebContents(content::WebContents* web_contents) const {
++  for (int i = 0; i < GetTabCount(); ++i) {
++    if (GetWebContentsAt(i) == web_contents)
++        return i;
++  }
++  return INVALID_TAB_INDEX;
++}
++
+ content::WebContents* TabModel::GetActiveWebContents() const {
+   int active_index = GetActiveIndex();
+   if (active_index == INVALID_TAB_INDEX)
+--- a/chrome/browser/ui/android/tab_model/tab_model.h
++++ b/chrome/browser/ui/android/tab_model/tab_model.h
+@@ -116,10 +116,12 @@ class TabModel {
+ 
+   virtual int GetTabCount() const = 0;
+   virtual int GetActiveIndex() const = 0;
++  virtual int GetIndexForWebContents(content::WebContents* web_contents) const;
+   virtual content::WebContents* GetActiveWebContents() const;
+   virtual content::WebContents* GetWebContentsAt(int index) const = 0;
+   // This will return NULL if the tab has not yet been initialized.
+   virtual TabAndroid* GetTabAt(int index) const = 0;
++  virtual TabAndroid* GetTabForId(int id) const = 0;
+ 
+   virtual void SetActiveIndex(int index) = 0;
+   virtual void CloseTabAt(int index) = 0;
+--- a/chrome/browser/ui/browser_navigator.cc
++++ b/chrome/browser/ui/browser_navigator.cc
+@@ -19,10 +19,14 @@
+ #include "chrome/browser/prefetch/no_state_prefetch/prerender_manager_factory.h"
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
+ #include "chrome/browser/signin/signin_promo.h"
+ #include "chrome/browser/tab_contents/tab_util.h"
+ #include "chrome/browser/task_manager/web_contents_tags.h"
++#include "chrome/browser/android/tab_android.h"
++#include "chrome/browser/ui/android/tab_model/tab_model.h"
++#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/browser_list.h"
+@@ -92,16 +96,8 @@ bool allow_os_settings_in_tab = false;
+ // |params.url|. Not all browsers support multiple tabs, such as app frames and
+ // popups. TYPE_APP will only open a new tab if the URL is within the app scope.
+ bool WindowCanOpenTabs(const NavigateParams& params) {
+-  if (!params.browser)
+-    return false;
+-
+-  if (params.browser->app_controller() &&
+-      !params.browser->app_controller()->IsUrlInAppScope(params.url)) {
+-    return false;
+-  }
+-
+-  return params.browser->CanSupportWindowFeature(Browser::FEATURE_TABSTRIP) ||
+-         params.browser->tab_strip_model()->empty();
++  // TODO: Except for opening from shortcut , this is always true
++  return true;
+ }
+ 
+ // Finds an existing Browser compatible with |profile|, making a new one if no
+@@ -165,10 +161,7 @@ std::pair<Browser*, int> GetBrowserAndTa
+     if (app_id) {
+       std::string app_name = web_app::GenerateApplicationNameFromAppId(*app_id);
+       return {
+-          Browser::Create(Browser::CreateParams::CreateForApp(
+-              app_name,
+-              true,  // trusted_source. Installed PWAs are considered trusted.
+-              params.window_bounds, profile, params.user_gesture)),
++          nullptr,
+           -1};
+     }
+   }
+@@ -190,7 +183,7 @@ std::pair<Browser*, int> GetBrowserAndTa
+         return {params.browser, -1};
+       // Find a compatible window and re-execute this command in it. Otherwise
+       // re-run with NEW_WINDOW.
+-      return {GetOrCreateBrowser(profile, params.user_gesture), -1};
++      return {nullptr, -1};
+     case WindowOpenDisposition::SINGLETON_TAB: {
+       // If we have a browser window, check it first.
+       if (params.browser) {
+@@ -217,7 +210,7 @@ std::pair<Browser*, int> GetBrowserAndTa
+ 
+       // Find a compatible window and re-execute this command in it. Otherwise
+       // re-run with NEW_WINDOW.
+-      return {GetOrCreateBrowser(profile, params.user_gesture), -1};
++      return {nullptr, -1};
+     case WindowOpenDisposition::NEW_POPUP: {
+       // Make a new popup window.
+       // Coerce app-style if |source| represents an app.
+@@ -235,22 +228,19 @@ std::pair<Browser*, int> GetBrowserAndTa
+                                              params.user_gesture);
+         browser_params.trusted_source = params.trusted_source;
+         browser_params.initial_bounds = params.window_bounds;
+-        return {Browser::Create(browser_params), -1};
++        return {nullptr, -1};
+       }
+-      return {Browser::Create(Browser::CreateParams::CreateForAppPopup(
+-                  app_name, params.trusted_source, params.window_bounds,
+-                  profile, params.user_gesture)),
++      return {nullptr,
+               -1};
+     }
+     case WindowOpenDisposition::NEW_WINDOW:
+       // Make a new normal browser window.
+       return {
+-          Browser::Create(Browser::CreateParams(profile, params.user_gesture)),
++          nullptr,
+           -1};
+     case WindowOpenDisposition::OFF_THE_RECORD:
+       // Make or find an incognito window.
+-      return {GetOrCreateBrowser(profile->GetPrimaryOTRProfile(),
+-                                 params.user_gesture),
++      return {nullptr,
+               -1};
+     // The following types result in no navigation.
+     case WindowOpenDisposition::SAVE_TO_DISK:
+@@ -266,13 +256,13 @@ std::pair<Browser*, int> GetBrowserAndTa
+ // conditions.
+ void NormalizeDisposition(NavigateParams* params) {
+   // Calculate the WindowOpenDisposition if necessary.
+-  if (params->browser->tab_strip_model()->empty() &&
++  if (!TabModelList::GetCurrentTabModel()->GetTabCount() &&
+       (params->disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
+        params->disposition == WindowOpenDisposition::CURRENT_TAB ||
+        params->disposition == WindowOpenDisposition::SINGLETON_TAB)) {
+     params->disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+   }
+-  if (params->browser->profile()->IsOffTheRecord() &&
++  if (ProfileManager::GetActiveUserProfile()->IsOffTheRecord() &&
+       params->disposition == WindowOpenDisposition::OFF_THE_RECORD) {
+     params->disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+   }
+@@ -411,10 +401,10 @@ std::unique_ptr<content::WebContents> Cr
+   scoped_refptr<content::SiteInstance> initial_site_instance_for_new_contents =
+       params.opener
+           ? params.opener->GetSiteInstance()
+-          : tab_util::GetSiteInstanceForNewTab(params.browser->profile(), url);
++          : tab_util::GetSiteInstanceForNewTab(ProfileManager::GetActiveUserProfile(), url);
+ 
+   WebContents::CreateParams create_params(
+-      params.browser->profile(), initial_site_instance_for_new_contents);
++      ProfileManager::GetActiveUserProfile(), initial_site_instance_for_new_contents);
+   create_params.main_frame_name = params.frame_name;
+   if (params.opener) {
+     create_params.opener_render_frame_id = params.opener->GetRoutingID();
+@@ -440,7 +430,8 @@ std::unique_ptr<content::WebContents> Cr
+   // immediately.
+   BrowserNavigatorWebContentsAdoption::AttachTabHelpers(target_contents.get());
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+-  apps::SetAppIdForWebContents(params.browser->profile(), target_contents.get(),
++  apps::SetAppIdForWebContents(ProfileManager::GetActiveUserProfile(),
++                               target_contents.get(),
+                                params.extension_app_id);
+ #endif
+ 
+@@ -460,8 +451,7 @@ std::unique_ptr<content::WebContents> Cr
+ 
+ void Navigate(NavigateParams* params) {
+   Browser* source_browser = params->browser;
+-  if (source_browser)
+-    params->initiating_profile = source_browser->profile();
++  params->initiating_profile = ProfileManager::GetActiveUserProfile();
+   DCHECK(params->initiating_profile);
+ 
+   if (source_browser &&
+@@ -511,9 +501,9 @@ void Navigate(NavigateParams* params) {
+   // the target browser. This must happen first, before
+   // GetBrowserForDisposition() has a chance to replace |params->browser| with
+   // another one.
+-  if (!params->source_contents && params->browser) {
++  if (!params->source_contents) {
+     params->source_contents =
+-        params->browser->tab_strip_model()->GetActiveWebContents();
++        TabModelList::GetCurrentTabModel()->GetActiveWebContents();
+   }
+ 
+   WebContents* contents_to_navigate_or_insert =
+@@ -525,17 +515,17 @@ void Navigate(NavigateParams* params) {
+   int singleton_index;
+   std::tie(params->browser, singleton_index) =
+       GetBrowserAndTabForDisposition(*params);
+-  if (!params->browser)
+-    return;
++//   if (!params->browser)
++//     return;
+   if (singleton_index != -1) {
+     contents_to_navigate_or_insert =
+-        params->browser->tab_strip_model()->GetWebContentsAt(singleton_index);
++        TabModelList::GetCurrentTabModel()->GetWebContentsAt(singleton_index);
+   } else if (params->disposition == WindowOpenDisposition::SWITCH_TO_TAB) {
+     // The user is trying to open a tab that no longer exists. If we open a new
+     // tab, it could leave orphaned NTPs around, but always overwriting the
+     // current tab could could clobber state that the user was trying to
+     // preserve. Fallback to the behavior used for singletons: overwrite the
+-    // current tab if it's the NTP, otherwise open a new tab.
++    // current tab if GetBrowserAndTabForDispositionit's the NTP, otherwise open a new tab.
+     params->disposition = WindowOpenDisposition::SINGLETON_TAB;
+     ShowSingletonTabOverwritingNTP(params->browser, std::move(*params));
+     return;
+@@ -578,10 +568,9 @@ void Navigate(NavigateParams* params) {
+     }
+   }
+ #endif
+-
+   // Navigate() must not return early after this point.
+ 
+-  if (GetSourceProfile(params) != params->browser->profile()) {
++  if (GetSourceProfile(params) != ProfileManager::GetActiveUserProfile()) {
+     // A tab is being opened from a link from a different profile, we must reset
+     // source information that may cause state to be shared.
+     params->opener = nullptr;
+@@ -591,7 +580,7 @@ void Navigate(NavigateParams* params) {
+   }
+ 
+   // Make sure the Browser is shown if params call for it.
+-  ScopedBrowserShower shower(params, &contents_to_navigate_or_insert);
++//   ScopedBrowserShower shower(params, &contents_to_navigate_or_insert);
+ 
+   // Makes sure any WebContents created by this function is destroyed if
+   // not properly added to a tab strip.
+@@ -602,18 +591,18 @@ void Navigate(NavigateParams* params) {
+   NormalizeDisposition(params);
+ 
+   // If a new window has been created, it needs to be shown.
+-  if (params->window_action == NavigateParams::NO_ACTION &&
+-      source_browser != params->browser &&
+-      params->browser->tab_strip_model()->empty()) {
+-    params->window_action = NavigateParams::SHOW_WINDOW;
+-  }
++//   if (params->window_action == NavigateParams::NO_ACTION &&
++//       source_browser != params->browser &&
++//       params->browser->tab_strip_model()->empty()) {
++//     params->window_action = NavigateParams::SHOW_WINDOW;
++//   }
+ 
+   // If we create a popup window from a non user-gesture, don't activate it.
+-  if (params->window_action == NavigateParams::SHOW_WINDOW &&
+-      params->disposition == WindowOpenDisposition::NEW_POPUP &&
+-      params->user_gesture == false) {
+-    params->window_action = NavigateParams::SHOW_WINDOW_INACTIVE;
+-  }
++//   if (params->window_action == NavigateParams::SHOW_WINDOW &&
++//       params->disposition == WindowOpenDisposition::NEW_POPUP &&
++//       params->user_gesture == false) {
++//     params->window_action = NavigateParams::SHOW_WINDOW_INACTIVE;
++//   }
+ 
+   // Determine if the navigation was user initiated. If it was, we need to
+   // inform the target WebContents, and we may need to update the UI.
+@@ -665,8 +654,8 @@ void Navigate(NavigateParams* params) {
+         contents_to_navigate_or_insert, params->transition,
+         params->window_action, user_initiated);
+   } else if (singleton_index == -1) {
+-    if (source_browser != params->browser)
+-      params->tabstrip_index = params->browser->tab_strip_model()->count();
++//     if (source_browser != params->browser)
++//       params->tabstrip_index = params->browser->tab_strip_model()->count();
+ 
+     // If some non-default value is set for the index, we should tell the
+     // TabStripModel to respect it.
+@@ -676,14 +665,18 @@ void Navigate(NavigateParams* params) {
+     // Maybe notify that an open operation has been done from a gesture.
+     // TODO(crbug.com/1129028): preferably pipe this information through the
+     // TabStripModel instead. See bug for deeper discussion.
+-    if (params->user_gesture && source_browser == params->browser)
+-      params->browser->window()->LinkOpeningFromGesture(params->disposition);
++//     if (params->user_gesture && source_browser == params->browser)
++//       params->browser->window()->LinkOpeningFromGesture(params->disposition);
+ 
+     DCHECK(contents_to_insert);
+     // The navigation should insert a new tab into the target Browser.
+-    params->browser->tab_strip_model()->AddWebContents(
+-        std::move(contents_to_insert), params->tabstrip_index,
+-        params->transition, params->tabstrip_add_types, params->group);
++    // Launch from active tab.
++    // TODO: Release the unique_ptr here. WebContentsAndroid will
++    // handle the deletion?
++    TabModel* tab_model = TabModelList::GetCurrentTabModel();
++    tab_model->CreateTab(
++        tab_model->GetTabAt(tab_model->GetActiveIndex()),
++        contents_to_insert.release());
+   }
+ 
+   if (singleton_index >= 0) {
+@@ -723,8 +716,7 @@ void Navigate(NavigateParams* params) {
+           should_close_this_tab = true;
+         }
+       }
+-      params->browser->tab_strip_model()->ActivateTabAt(singleton_index,
+-                                                        {gesture_type});
++      TabModelList::GetCurrentTabModel()->SetActiveIndex(singleton_index);
+       // Close tab after switch so index remains correct.
+       if (should_close_this_tab)
+         params->source_contents->Close();
+--- a/content/public/browser/web_contents_user_data.h
++++ b/content/public/browser/web_contents_user_data.h
+@@ -45,6 +45,8 @@ class WebContentsUserData : public base:
+   // of the type was attached, returns nullptr.
+   static T* FromWebContents(WebContents* contents) {
+     DCHECK(contents);
++    if (!contents)
++      return nullptr;
+     return static_cast<T*>(contents->GetUserData(UserDataKey()));
+   }
+   static const T* FromWebContents(const WebContents* contents) {
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelObserverJniBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelObserverJniBridge.java
+@@ -126,7 +126,11 @@ class TabModelObserverJniBridge implemen
+     }
+ 
+     @Override
+-    public void restoreCompleted() {}
++    public final void restoreCompleted() {
++        assert mNativeTabModelObserverJniBridge != 0;
++        TabModelObserverJniBridgeJni.get().restoreCompleted(
++                mNativeTabModelObserverJniBridge, TabModelObserverJniBridge.this);
++    }
+ 
+     /**
+      * Creates an observer bridge for the given tab model. The native counterpart to this object
+@@ -188,5 +192,7 @@ class TabModelObserverJniBridge implemen
+                 long nativeTabModelObserverJniBridge, TabModelObserverJniBridge caller);
+         void tabRemoved(
+                 long nativeTabModelObserverJniBridge, TabModelObserverJniBridge caller, Tab tab);
++        void restoreCompleted(
++                long nativeTabModelObserverJniBridge, TabModelObserverJniBridge caller);
+     }
+ }
+--- a/chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.cc
++++ b/chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.h"
+ 
++#include "base/logging.h"
+ #include "chrome/android/chrome_jni_headers/TabModelObserverJniBridge_jni.h"
+ #include "chrome/browser/android/tab_android.h"
+ #include "chrome/browser/ui/android/tab_model/tab_model.h"
+@@ -53,8 +54,9 @@ void TabModelObserverJniBridge::DidSelec
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
+   TabModel::TabSelectionType type = GetTabSelectionType(env, jtype);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: DidSelectTab: type: " << static_cast<int>(type);
+   for (auto& observer : observers_)
+-    observer.DidSelectTab(tab, type);
++    observer.DidSelectTab(tab, type, last_id);
+ }
+ 
+ void TabModelObserverJniBridge::WillCloseTab(JNIEnv* env,
+@@ -63,6 +65,7 @@ void TabModelObserverJniBridge::WillClos
+                                              bool animate) {
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: WillCloseTab";
+   for (auto& observer : observers_)
+     observer.WillCloseTab(tab, animate);
+ }
+@@ -71,6 +74,7 @@ void TabModelObserverJniBridge::DidClose
+                                             const JavaParamRef<jobject>& jobj,
+                                             int tab_id,
+                                             bool incognito) {
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: DidCloseTab";
+   for (auto& observer : observers_)
+     observer.DidCloseTab(tab_id, incognito);
+ }
+@@ -82,6 +86,7 @@ void TabModelObserverJniBridge::WillAddT
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
+   TabModel::TabLaunchType type = GetTabLaunchType(env, jtype);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: WillAddTab: type: " << static_cast<int>(type);
+   for (auto& observer : observers_)
+     observer.WillAddTab(tab, type);
+ }
+@@ -93,6 +98,7 @@ void TabModelObserverJniBridge::DidAddTa
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
+   TabModel::TabLaunchType type = GetTabLaunchType(env, jtype);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: DidAddTab: type: " << static_cast<int>(type);
+   for (auto& observer : observers_)
+     observer.DidAddTab(tab, type);
+ }
+@@ -104,6 +110,7 @@ void TabModelObserverJniBridge::DidMoveT
+                                            int cur_index) {
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: DidMoveTab";
+   for (auto& observer : observers_)
+     observer.DidMoveTab(tab, new_index, cur_index);
+ }
+@@ -114,6 +121,7 @@ void TabModelObserverJniBridge::TabPendi
+     const JavaParamRef<jobject>& jtab) {
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: TabPendingClosure";
+   for (auto& observer : observers_)
+     observer.TabPendingClosure(tab);
+ }
+@@ -124,6 +132,7 @@ void TabModelObserverJniBridge::TabClosu
+     const JavaParamRef<jobject>& jtab) {
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: TabClosureUndone";
+   for (auto& observer : observers_)
+     observer.TabClosureUndone(tab);
+ }
+@@ -134,6 +143,7 @@ void TabModelObserverJniBridge::TabClosu
+     const JavaParamRef<jobject>& jtab) {
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: TabClosureCommitted";
+   for (auto& observer : observers_)
+     observer.TabClosureCommitted(tab);
+ }
+@@ -143,6 +153,7 @@ void TabModelObserverJniBridge::AllTabsP
+     const JavaParamRef<jobject>& jobj,
+     const JavaParamRef<jobjectArray>& jtabs) {
+   std::vector<TabAndroid*> tabs;
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: AllTabsPendingClosure";
+ 
+   // |jtabs| is actually a Tab[]. Iterate over the array and convert it to
+   // a vector of TabAndroid*.
+@@ -161,6 +172,7 @@ void TabModelObserverJniBridge::AllTabsP
+ void TabModelObserverJniBridge::AllTabsClosureCommitted(
+     JNIEnv* env,
+     const JavaParamRef<jobject>& jobj) {
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: AllTabsClosureCommitted";
+   for (auto& observer : observers_)
+     observer.AllTabsClosureCommitted();
+ }
+@@ -170,10 +182,19 @@ void TabModelObserverJniBridge::TabRemov
+                                            const JavaParamRef<jobject>& jtab) {
+   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
+   CHECK(tab);
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: TabRemoved";
+   for (auto& observer : observers_)
+     observer.TabRemoved(tab);
+ }
+ 
++void TabModelObserverJniBridge::RestoreCompleted(
++    JNIEnv* env,
++    const JavaParamRef<jobject>& jobj) {
++  LOG(INFO) << "tab_model_observer_jni_bridge.cc: RestoreCompleted";
++  for (auto& observer : observers_)
++    observer.RestoreCompleted();
++}
++
+ void TabModelObserverJniBridge::AddObserver(TabModelObserver* observer) {
+   observers_.AddObserver(observer);
+ }
+--- a/chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.h
++++ b/chrome/browser/ui/android/tab_model/tab_model_observer_jni_bridge.h
+@@ -87,6 +87,10 @@ class TabModelObserverJniBridge {
+                   const base::android::JavaParamRef<jobject>& jobj,
+                   const base::android::JavaParamRef<jobject>& jtab);
+ 
++  void RestoreCompleted(
++      JNIEnv* env,
++      const base::android::JavaParamRef<jobject>& jobj);
++
+   void AddObserver(TabModelObserver* observer);
+   void RemoveObserver(TabModelObserver* observer);
+ 
+--- a/chrome/browser/ui/android/tab_model/tab_model_observer.cc
++++ b/chrome/browser/ui/android/tab_model/tab_model_observer.cc
+@@ -11,7 +11,7 @@ TabModelObserver::TabModelObserver() {}
+ TabModelObserver::~TabModelObserver() {}
+ 
+ void TabModelObserver::DidSelectTab(TabAndroid* tab,
+-                                    TabModel::TabSelectionType type) {}
++                                    TabModel::TabSelectionType type, int last_id) {}
+ 
+ void TabModelObserver::WillCloseTab(TabAndroid* tab, bool animate) {}
+ 
+@@ -39,3 +39,5 @@ void TabModelObserver::AllTabsPendingClo
+ void TabModelObserver::AllTabsClosureCommitted() {}
+ 
+ void TabModelObserver::TabRemoved(TabAndroid* tab) {}
++
++void TabModelObserver::RestoreCompleted() {}
+--- a/chrome/browser/ui/android/tab_model/tab_model_observer.h
++++ b/chrome/browser/ui/android/tab_model/tab_model_observer.h
+@@ -21,7 +21,7 @@ class TabModelObserver {
+   virtual ~TabModelObserver();
+ 
+   // Called when a |tab| is selected.
+-  virtual void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type);
++  virtual void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type, int last_id);
+ 
+   // Called when a |tab| starts closing.
+   virtual void WillCloseTab(TabAndroid* tab, bool animate);
+@@ -61,6 +61,9 @@ class TabModelObserver {
+   // the TabModel.
+   virtual void TabRemoved(TabAndroid* tab);
+ 
++  // Called after all tabstates within TabModel are loaded from storage.
++  virtual void RestoreCompleted();
++
+  private:
+   DISALLOW_COPY_AND_ASSIGN(TabModelObserver);
+ };
+--- a/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc
++++ b/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc
+@@ -137,6 +137,15 @@ TabAndroid* TabModelJniBridge::GetTabAt(
+   return jtab.is_null() ? NULL : TabAndroid::GetNativeTab(env, jtab);
+ }
+ 
++TabAndroid* TabModelJniBridge::GetTabForId(int id) const {
++  for (int i = 0; i < GetTabCount(); ++i) {
++    TabAndroid* tab = GetTabAt(i);
++    if (tab && tab->GetAndroidId() == id)
++        return tab;
++  }
++  return nullptr;
++}
++
+ void TabModelJniBridge::SetActiveIndex(int index) {
+   JNIEnv* env = AttachCurrentThread();
+   Java_TabModelJniBridge_setIndex(env, java_object_.get(env), index);
+--- a/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.h
++++ b/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.h
+@@ -46,6 +46,7 @@ class TabModelJniBridge : public TabMode
+   int GetActiveIndex() const override;
+   content::WebContents* GetWebContentsAt(int index) const override;
+   TabAndroid* GetTabAt(int index) const override;
++  TabAndroid* GetTabForId(int id) const override;
+ 
+   void SetActiveIndex(int index) override;
+   void CloseTabAt(int index) override;

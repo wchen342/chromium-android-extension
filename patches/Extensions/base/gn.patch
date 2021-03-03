@@ -1,0 +1,1522 @@
+From: Wengling Chen <feiyu2817@gmail.com>
+Date: Sat, 30 May 2020 18:25:38 -0400
+Subject: gn fixes for enable_extensions=true
+
+---
+ apps/BUILD.gn                                                        |    2 
+ build/config/locales.gni                                             |    4 
+ chrome/BUILD.gn                                                      |    4 
+ chrome/android/BUILD.gn                                              |    1 
+ chrome/browser/BUILD.gn                                              |   58 ++----
+ chrome/browser/apps/platform_apps/api/music_manager_private/BUILD.gn |    2 
+ chrome/browser/devtools/BUILD.gn                                     |   14 -
+ chrome/browser/extensions/BUILD.gn                                   |   10 -
+ chrome/browser/media/router/discovery/BUILD.gn                       |    4 
+ chrome/browser/nearby_sharing/BUILD.gn                               |    2 
+ chrome/browser/resources/BUILD.gn                                    |    2 
+ chrome/browser/ui/BUILD.gn                                           |   86 +---------
+ chrome/browser/ui/views/BUILD.gn                                     |    2 
+ chrome/browser/ui/webui/discards/BUILD.gn                            |    2 
+ chrome/browser/web_applications/BUILD.gn                             |    3 
+ chrome/browser/web_applications/components/BUILD.gn                  |    7 
+ chrome/browser/web_applications/extensions/BUILD.gn                  |    1 
+ chrome/chrome_paks.gni                                               |    4 
+ chrome/common/BUILD.gn                                               |    2 
+ chrome/common/extensions/api/api_sources.gni                         |    2 
+ chrome/common/importer/BUILD.gn                                      |    2 
+ chrome/renderer/BUILD.gn                                             |    2 
+ chrome/test/BUILD.gn                                                 |    1 
+ components/autofill/core/browser/BUILD.gn                            |    2 
+ components/bookmarks/browser/BUILD.gn                                |    2 
+ components/enterprise/BUILD.gn                                       |    2 
+ components/guest_view/browser/BUILD.gn                               |    2 
+ components/guest_view/renderer/BUILD.gn                              |    2 
+ components/keep_alive_registry/BUILD.gn                              |    2 
+ components/media_router/browser/BUILD.gn                             |    2 
+ components/media_router/common/BUILD.gn                              |    2 
+ components/performance_manager/BUILD.gn                              |    2 
+ components/web_modal/BUILD.gn                                        |    2 
+ components/zoom/BUILD.gn                                             |    2 
+ content/browser/BUILD.gn                                             |    4 
+ content/browser/devtools/BUILD.gn                                    |    2 
+ content/public/browser/BUILD.gn                                      |    2 
+ device/fido/BUILD.gn                                                 |    2 
+ extensions/BUILD.gn                                                  |    1 
+ extensions/browser/api/system_cpu/BUILD.gn                           |    2 
+ extensions/buildflags/buildflags.gni                                 |    2 
+ media/mojo/mojom/BUILD.gn                                            |    2 
+ services/device/public/cpp/hid/BUILD.gn                              |    1 
+ third_party/blink/public/mojom/BUILD.gn                              |    1 
+ ui/base/BUILD.gn                                                     |   20 --
+ ui/gfx/BUILD.gn                                                      |    2 
+ ui/gfx/animation/BUILD.gn                                            |    2 
+ ui/message_center/BUILD.gn                                           |    4 
+ ui/views/BUILD.gn                                                    |   19 ++
+ ui/webui/resources/BUILD.gn                                          |    6 
+ ui/webui/resources/css/BUILD.gn                                      |    2 
+ ui/webui/resources/html/BUILD.gn                                     |    2 
+ ui/webui/resources/js/BUILD.gn                                       |    2 
+ ui/webui/resources/js/cr/ui/BUILD.gn                                 |    2 
+ 54 files changed, 113 insertions(+), 206 deletions(-)
+
+--- a/apps/BUILD.gn
++++ b/apps/BUILD.gn
+@@ -7,7 +7,7 @@ import("//build/config/features.gni")
+ import("//build/config/ui.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(!is_android && !is_ios)
++# assert(!is_android && !is_ios)
+ assert(enable_extensions,
+        "Cannot depend on extensions because enable_extensions=false.")
+ 
+--- a/chrome/browser/media/router/discovery/BUILD.gn
++++ b/chrome/browser/media/router/discovery/BUILD.gn
+@@ -2,8 +2,6 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(!is_android)
+-
+ static_library("discovery") {
+   inputs = [ "$root_gen_dir/chrome/grit/generated_resources.h" ]
+   deps = [
+@@ -75,7 +73,7 @@ static_library("discovery") {
+     sources += [ "discovery_network_list_wifi_linux.cc" ]
+   }
+ 
+-  if (is_posix) {
++  if (is_posix && !is_android) {
+     sources += [ "discovery_network_list_posix.cc" ]
+   }
+ 
+--- a/ui/base/BUILD.gn
++++ b/ui/base/BUILD.gn
+@@ -454,6 +454,11 @@ component("base") {
+     deps += [ "//third_party/re2" ]
+   }
+ 
++  sources += [
++    "dragdrop/os_exchange_data_provider_non_backed.cc",
++    "dragdrop/os_exchange_data_provider_non_backed.h",
++  ]
++
+   if (!is_ios) {
+     # iOS does not use Chromium-specific code for event handling.
+     public_deps += [
+@@ -530,8 +535,6 @@ component("base") {
+ 
+   if (is_chromeos || (use_aura && is_linux)) {
+     sources += [
+-      "dragdrop/os_exchange_data_provider_non_backed.cc",
+-      "dragdrop/os_exchange_data_provider_non_backed.h",
+     ]
+   }
+ 
+@@ -563,14 +566,6 @@ component("base") {
+   if (!toolkit_views && !use_aura) {
+     sources -= [
+       "dragdrop/drag_drop_types.h",
+-      "dragdrop/drop_target_event.cc",
+-      "dragdrop/drop_target_event.h",
+-      "dragdrop/os_exchange_data.cc",
+-      "dragdrop/os_exchange_data.h",
+-      "dragdrop/os_exchange_data_provider_factory.cc",
+-      "dragdrop/os_exchange_data_provider_factory.h",
+-      "nine_image_painter_factory.cc",
+-      "nine_image_painter_factory.h",
+     ]
+   }
+ 
+@@ -579,11 +574,6 @@ component("base") {
+     libs += [ "jnigraphics" ]
+ 
+     sources -= [
+-      "l10n/l10n_font_util.cc",
+-      "models/button_menu_item_model.cc",
+-      "pointer/touch_editing_controller.cc",
+-      "theme_provider.cc",
+-      "ui_base_types.cc",
+     ]
+   }
+ 
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -210,7 +210,6 @@ source_set("web_applications_unit_tests"
+     "//chrome/browser/web_applications/components",
+     "//chrome/browser/web_applications/preinstalled_web_apps",
+     "//chrome/common",
+-    "//chrome/test:test_support",
+     "//components/services/app_service/public/cpp:app_url_handling",
+     "//components/services/app_service/public/cpp:protocol_handling",
+     "//content/public/browser",
+@@ -267,8 +266,6 @@ source_set("web_applications_browser_tes
+     "//chrome/browser/web_applications/components",
+     "//chrome/browser/web_applications/extensions",
+     "//chrome/browser/web_applications/preinstalled_web_apps",
+-    "//chrome/test:test_support",
+-    "//chrome/test:test_support_ui",
+     "//components/permissions:permissions",
+     "//components/services/app_service/public/cpp:app_update",
+     "//components/services/app_service/public/cpp:intents",
+--- a/chrome/browser/web_applications/components/BUILD.gn
++++ b/chrome/browser/web_applications/components/BUILD.gn
+@@ -2,6 +2,8 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++set_sources_assignment_filter([])
++
+ source_set("components") {
+   sources = [
+     "app_icon_manager.cc",
+@@ -62,6 +64,8 @@ source_set("components") {
+     "web_app_run_on_os_login.h",
+     "web_app_shortcut.cc",
+     "web_app_shortcut.h",
++    "web_app_shortcut_linux.cc",
++    "web_app_shortcut_linux.h",
+     "web_app_shortcuts_menu.cc",
+     "web_app_shortcuts_menu.h",
+     "web_app_tab_helper_base.cc",
+@@ -208,7 +212,6 @@ source_set("unit_tests") {
+     "//chrome/browser/web_applications:web_applications",
+     "//chrome/browser/web_applications:web_applications_test_support",
+     "//chrome/browser/web_applications/extensions:extensions",
+-    "//chrome/test:test_support",
+     "//content/public/browser",
+     "//skia",
+     "//testing/gmock",
+@@ -238,8 +241,6 @@ source_set("browser_tests") {
+   deps = [
+     ":components",
+     "//chrome/browser/web_applications:web_applications_test_support",
+-    "//chrome/test:test_support",
+-    "//chrome/test:test_support_ui",
+     "//net:test_support",
+   ]
+ }
+--- a/chrome/browser/web_applications/extensions/BUILD.gn
++++ b/chrome/browser/web_applications/extensions/BUILD.gn
+@@ -72,7 +72,6 @@ source_set("unit_tests") {
+     "//chrome/browser/web_applications:web_applications_test_support",
+     "//chrome/browser/web_applications/components",
+     "//chrome/common",
+-    "//chrome/test:test_support",
+     "//components/crx_file:crx_file",
+     "//content/public/browser",
+     "//content/test:test_support",
+--- a/chrome/browser/ui/views/BUILD.gn
++++ b/chrome/browser/ui/views/BUILD.gn
+@@ -5,8 +5,6 @@
+ import("//build/config/ui.gni")
+ import("//ui/views/features.gni")
+ 
+-assert(toolkit_views)
+-
+ component("views") {
+   output_name = "browser_ui_views"
+   sources = [
+--- a/components/guest_view/browser/BUILD.gn
++++ b/components/guest_view/browser/BUILD.gn
+@@ -6,7 +6,7 @@
+ # assert to prevent the accidental building of GuestViews on mobile
+ # platforms. If you're now using GuestViews on mobile, go ahead and
+ # remove this assert.
+-assert(!is_android && !is_ios)
++# assert(!is_android && !is_ios)
+ 
+ static_library("browser") {
+   output_name = "guest_view_browser"
+--- a/components/guest_view/renderer/BUILD.gn
++++ b/components/guest_view/renderer/BUILD.gn
+@@ -6,7 +6,7 @@
+ # assert to prevent the accidental building of GuestViews on mobile
+ # platforms. If you're now using GuestViews on mobile, go ahead and
+ # remove this assert.
+-assert(!is_android && !is_ios)
++# assert(!is_android && !is_ios)
+ 
+ static_library("renderer") {
+   sources = [
+--- a/components/keep_alive_registry/BUILD.gn
++++ b/components/keep_alive_registry/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(!is_android)
++# assert(!is_android)
+ 
+ source_set("keep_alive_registry") {
+   sources = [
+--- a/components/web_modal/BUILD.gn
++++ b/components/web_modal/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(!is_android && !is_ios)
++# assert(!is_android && !is_ios)
+ 
+ component("web_modal") {
+   sources = [
+--- a/components/zoom/BUILD.gn
++++ b/components/zoom/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(!is_android && !is_ios, "Desktop zoom is not used on mobile platforms.")
++# assert(!is_android && !is_ios, "Desktop zoom is not used on mobile platforms.")
+ 
+ static_library("zoom") {
+   sources = [
+--- a/extensions/buildflags/buildflags.gni
++++ b/extensions/buildflags/buildflags.gni
+@@ -3,7 +3,7 @@
+ # found in the LICENSE file.
+ 
+ declare_args() {
+-  enable_extensions = !is_android && !is_ios && !is_fuchsia
++  enable_extensions = !is_ios && !is_fuchsia
+ 
+   # Enables Wi-Fi Display functionality
+   # WARNING: This enables MPEG Transport Stream (MPEG-TS) encoding!
+--- a/services/device/public/cpp/hid/BUILD.gn
++++ b/services/device/public/cpp/hid/BUILD.gn
+@@ -8,7 +8,6 @@ import("//build/config/features.gni")
+ source_set("hid") {
+   # HID is not implemented on Android and we want to be particularly careful
+   # about not bloating binary size by accidentially including it.
+-  assert(!is_android)
+ 
+   sources = [
+     "hid_collection.cc",
+--- a/ui/views/BUILD.gn
++++ b/ui/views/BUILD.gn
+@@ -11,7 +11,7 @@ import("//testing/test.gni")
+ import("//ui/base/ui_features.gni")
+ import("//ui/views/features.gni")
+ 
+-assert(toolkit_views)
++# assert(toolkit_views)
+ 
+ config("flags") {
+   defines = [ "TOOLKIT_VIEWS=1" ]
+@@ -145,6 +145,7 @@ component("views") {
+     "controls/menu/new_badge.h",
+     "controls/menu/submenu_view.h",
+     "controls/message_box_view.h",
++    "controls/native/native_view_host_aura.h",
+     "controls/native/native_view_host.h",
+     "controls/native/native_view_host_mac.h",
+     "controls/native/native_view_host_wrapper.h",
+@@ -180,6 +181,7 @@ component("views") {
+     "debug_utils.h",
+     "drag_controller.h",
+     "drag_utils.h",
++    "event_monitor_aura.h",
+     "event_monitor.h",
+     "focus/external_focus_tracker.h",
+     "focus/focus_manager.h",
+@@ -247,10 +249,12 @@ component("views") {
+     "widget/any_widget_observer_singleton.h",
+     "widget/drop_helper.h",
+     "widget/native_widget.h",
++    "widget/native_widget_aura.h",
+     "widget/native_widget_delegate.h",
+     "widget/native_widget_private.h",
+     "widget/root_view.h",
+     "widget/root_view_targeter.h",
++    "widget/tooltip_manager_aura.h",
+     "widget/tooltip_manager.h",
+     "widget/unique_widget_ptr.h",
+     "widget/widget.h",
+@@ -344,6 +348,7 @@ component("views") {
+     "controls/label.cc",
+     "controls/link.cc",
+     "controls/menu/menu_config.cc",
++    "controls/menu/menu_config_linux.cc",
+     "controls/menu/menu_controller.cc",
+     "controls/menu/menu_delegate.cc",
+     "controls/menu/menu_host.cc",
+@@ -351,6 +356,8 @@ component("views") {
+     "controls/menu/menu_image_util.cc",
+     "controls/menu/menu_item_view.cc",
+     "controls/menu/menu_model_adapter.cc",
++    "controls/menu/menu_pre_target_handler_aura.cc",
++    "controls/menu/menu_pre_target_handler_aura.h",
+     "controls/menu/menu_runner.cc",
+     "controls/menu/menu_runner_impl.cc",
+     "controls/menu/menu_runner_impl_adapter.cc",
+@@ -359,6 +366,7 @@ component("views") {
+     "controls/menu/new_badge.cc",
+     "controls/menu/submenu_view.cc",
+     "controls/message_box_view.cc",
++    "controls/native/native_view_host_aura.cc",
+     "controls/native/native_view_host.cc",
+     "controls/prefix_selector.cc",
+     "controls/progress_bar.cc",
+@@ -387,6 +395,8 @@ component("views") {
+     "controls/views_text_services_context_menu_base.h",
+     "debug_utils.cc",
+     "drag_utils.cc",
++    "drag_utils_aura.cc",
++    "event_monitor_aura.cc",
+     "focus/external_focus_tracker.cc",
+     "focus/focus_manager.cc",
+     "focus/focus_manager_factory.cc",
+@@ -412,9 +422,11 @@ component("views") {
+     "metadata/metadata_types.cc",
+     "metadata/type_conversion.cc",
+     "metadata/view_factory_internal.cc",
++    "metrics_aura.cc",
+     "metrics.cc",
+     "mouse_watcher.cc",
+     "mouse_watcher_view_host.cc",
++    "native_cursor_aura.cc",
+     "paint_info.cc",
+     "painter.cc",
+     "rect_based_targeting_utils.cc",
+@@ -424,6 +436,7 @@ component("views") {
+     "style/platform_style.cc",
+     "style/typography.cc",
+     "style/typography_provider.cc",
++    "touchui/touch_selection_controller_impl.cc",
+     "view.cc",
+     "view_class_properties.cc",
+     "view_constants.cc",
+@@ -435,12 +448,15 @@ component("views") {
+     "views_delegate.cc",
+     "views_features.cc",
+     "views_switches.cc",
++    "views_touch_selection_controller_factory_aura.cc",
+     "widget/any_widget_observer.cc",
+     "widget/any_widget_observer_singleton.cc",
+     "widget/drop_helper.cc",
++    "widget/native_widget_aura.cc",
+     "widget/native_widget_private.cc",
+     "widget/root_view.cc",
+     "widget/root_view_targeter.cc",
++    "widget/tooltip_manager_aura.cc",
+     "widget/tooltip_manager.cc",
+     "widget/unique_widget_ptr.cc",
+     "widget/widget.cc",
+@@ -490,6 +506,7 @@ component("views") {
+     "//skia",
+     "//third_party/icu",
+     "//ui/accessibility",
++    "//ui/android",
+     "//ui/base/clipboard",
+     "//ui/base/dragdrop/mojom:mojom_shared",
+     "//ui/display",
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5450,7 +5450,6 @@ test("unit_tests") {
+       "//components/enterprise:test_support",
+       "//components/safe_browsing:buildflags",
+       "//components/services/unzip:in_process",
+-      "//extensions:extensions_resources",
+       "//extensions/browser:test_support",
+       "//extensions/browser:value_store_test_support",
+       "//extensions/common",
+--- a/extensions/BUILD.gn
++++ b/extensions/BUILD.gn
+@@ -225,7 +225,6 @@ test("extensions_unittests") {
+   ]
+ 
+   deps = [
+-    ":extensions_resources",
+     ":shell_and_test_pak",
+     ":test_support",
+     "//base/test:test_support",
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1356,7 +1356,7 @@ group("extra_resources") {
+     "//components/autofill/core/browser:autofill_address_rewriter_resources",
+   ]
+ 
+-  if (!is_android) {
++  if (enable_extensions) {
+     public_deps += [
+       "//chrome/browser/resources:component_extension_resources",
+       "//chrome/browser/resources:dev_ui_paks",
+@@ -1391,7 +1391,7 @@ group("extra_resources") {
+     public_deps += [ "//chrome/browser/resources/webui_js_exception:webui_js_exception_resources" ]
+   }
+ 
+-  if (!is_android && !is_chromeos) {
++  if (is_android && !is_chromeos) {
+     public_deps += [
+       "//chrome/browser/resources/signin/profile_picker:profile_picker_resources",
+       "//chrome/browser/resources/welcome:welcome_resources",
+--- a/third_party/blink/public/mojom/BUILD.gn
++++ b/third_party/blink/public/mojom/BUILD.gn
+@@ -248,7 +248,6 @@ mojom("mojom_platform") {
+       "//services/network/public/mojom:cookies_mojom",
+       "//ui/latency/mojom",
+     ]
+-  } else {
+     sources += [
+       "direct_sockets/direct_sockets.mojom",
+       "serial/serial.mojom",
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -38,6 +38,8 @@ import("//third_party/widevine/cdm/widev
+ import("//tools/grit/grit_rule.gni")
+ import("//ui/base/ui_features.gni")
+ 
++set_sources_assignment_filter([])
++
+ # //build/config/android/rules.gni imports //tools/grit/grit_rule.gni, which
+ # produces a conflict for the "grit" template so we have to only include one.
+ if (is_android) {
+@@ -438,6 +440,7 @@ static_library("browser") {
+     "download/download_ui_controller.h",
+     "download/download_ui_model.cc",
+     "download/download_ui_model.h",
++    "download/drag_download_item_aura.cc",
+     "download/drag_download_item.h",
+     "download/mixed_content_download_blocking.cc",
+     "download/mixed_content_download_blocking.h",
+@@ -2976,7 +2979,6 @@ static_library("browser") {
+       "download/android/service/download_task_scheduler.cc",
+       "download/android/service/download_task_scheduler.h",
+       "download/android/string_utils.cc",
+-      "download/download_crx_util_android.cc",
+       "engagement/site_engagement_service_android.cc",
+       "engagement/site_engagement_service_android.h",
+       "enterprise/util/android_enterprise_info.cc",
+@@ -3328,7 +3330,6 @@ static_library("browser") {
+       ]
+       deps += [ "//chrome/android/modules/dev_ui/provider:native" ]
+     }
+-  } else {
+     #!is_android
+     sources += [
+       "accessibility/caption_controller.cc",
+@@ -3550,10 +3551,6 @@ static_library("browser") {
+       "importer/importer_uma.h",
+       "importer/in_process_importer_bridge.cc",
+       "importer/in_process_importer_bridge.h",
+-      "importer/profile_writer.cc",
+-      "importer/profile_writer.h",
+-      "intranet_redirect_detector.cc",
+-      "intranet_redirect_detector.h",
+       "lifetime/browser_close_manager.cc",
+       "lifetime/browser_close_manager.h",
+       "lifetime/termination_notification.cc",
+@@ -3598,11 +3595,6 @@ static_library("browser") {
+       "media/webrtc/desktop_media_picker_factory_impl.h",
+       "media/webrtc/display_media_access_handler.cc",
+       "media/webrtc/display_media_access_handler.h",
+-      "media/webrtc/media_authorization_wrapper_mac.h",
+-      "media/webrtc/system_media_capture_permissions_mac.h",
+-      "media/webrtc/system_media_capture_permissions_mac.mm",
+-      "media/webrtc/system_media_capture_permissions_stats_mac.h",
+-      "media/webrtc/system_media_capture_permissions_stats_mac.mm",
+       "media/webrtc/tab_desktop_media_list.cc",
+       "media/webrtc/tab_desktop_media_list.h",
+       "media_galleries/fileapi/av_scanning_file_validator.cc",
+@@ -3660,7 +3652,6 @@ static_library("browser") {
+       "metrics/desktop_session_duration/touch_mode_stats_tracker.h",
+       "metrics/first_web_contents_profiler.cc",
+       "metrics/first_web_contents_profiler.h",
+-      "metrics/incognito_observer_desktop.cc",
+       "metrics/tab_stats_data_store.cc",
+       "metrics/tab_stats_data_store.h",
+       "metrics/tab_stats_tracker.cc",
+@@ -3870,16 +3861,6 @@ static_library("browser") {
+       "sharesheet/sharesheet_service_delegate.h",
+       "sharesheet/sharesheet_service_factory.cc",
+       "sharesheet/sharesheet_service_factory.h",
+-      "sharing/click_to_call/click_to_call_context_menu_observer.cc",
+-      "sharing/click_to_call/click_to_call_context_menu_observer.h",
+-      "sharing/click_to_call/click_to_call_metrics.cc",
+-      "sharing/click_to_call/click_to_call_metrics.h",
+-      "sharing/click_to_call/click_to_call_ui_controller.cc",
+-      "sharing/click_to_call/click_to_call_ui_controller.h",
+-      "sharing/click_to_call/click_to_call_utils.cc",
+-      "sharing/click_to_call/click_to_call_utils.h",
+-      "sharing/click_to_call/phone_number_regex.cc",
+-      "sharing/click_to_call/phone_number_regex.h",
+       "sharing/shared_clipboard/remote_copy_message_handler.cc",
+       "sharing/shared_clipboard/remote_copy_message_handler.h",
+       "sharing/shared_clipboard/shared_clipboard_context_menu_observer.cc",
+@@ -4033,6 +4014,9 @@ static_library("browser") {
+       "upgrade_detector/build_state.cc",
+       "upgrade_detector/build_state.h",
+       "upgrade_detector/build_state_observer.h",
++      "upgrade_detector/directory_monitor.cc",
++      "upgrade_detector/directory_monitor.h",
++      "upgrade_detector/get_installed_version_linux.cc",
+       "upgrade_detector/upgrade_detector.cc",
+       "upgrade_detector/upgrade_detector.h",
+       "upgrade_detector/upgrade_observer.h",
+@@ -4055,6 +4039,10 @@ static_library("browser") {
+       "webauthn/observable_authenticator_list.cc",
+       "webauthn/observable_authenticator_list.h",
+     ]
++    sources -= [
++      "banners/app_banner_manager_desktop.cc",
++      "banners/app_banner_manager_desktop.h",
++    ]
+     deps += [
+       ":theme_properties",
+       "//base/util/memory_pressure",
+@@ -4068,7 +4056,6 @@ static_library("browser") {
+       "//chrome/browser/profile_resetter:profile_reset_report_proto",
+       "//chrome/browser/resource_coordinator:intervention_policy_database_proto",
+       "//chrome/browser/resource_coordinator:tab_metrics_event_proto",
+-      "//chrome/browser/resource_coordinator/tab_ranker",
+       "//chrome/browser/resources:component_extension_resources",
+       "//chrome/browser/search:generated",
+       "//chrome/browser/ui/color:color_headers",
+@@ -4135,7 +4122,6 @@ static_library("browser") {
+         "chrome_browser_main_posix.cc",
+         "chrome_browser_main_posix.h",
+         "importer/firefox_profile_lock_posix.cc",
+-        "process_singleton_posix.cc",
+         "task_manager/sampling/shared_sampler_posix.cc",
+       ]
+ 
+@@ -4917,16 +4903,13 @@ static_library("browser") {
+     }
+   }
+ 
+-  if (is_linux || is_chromeos) {
+     sources += [
+-      "chrome_browser_main_linux.cc",
+-      "chrome_browser_main_linux.h",
+-      "first_run/first_run_internal_linux.cc",
+-      "memory_details_linux.cc",
+       "obsolete_system/obsolete_system_linux.cc",
+       "policy/browser_dm_token_storage_linux.cc",
+       "policy/browser_dm_token_storage_linux.h",
+     ]
++
++  if (is_linux || is_chromeos) {
+     if (use_aura) {
+       deps += [ "//third_party/fontconfig" ]
+       if (use_dbus) {
+@@ -5083,7 +5066,7 @@ static_library("browser") {
+     ]
+   }
+ 
+-  if (!is_android && !is_chromeos) {
++  if (is_android && !is_chromeos) {
+     sources += [
+       "device_identity/device_oauth2_token_store_desktop.cc",
+       "device_identity/device_oauth2_token_store_desktop.h",
+@@ -5110,12 +5093,8 @@ static_library("browser") {
+       "password_manager/multi_profile_credentials_filter.cc",
+       "password_manager/multi_profile_credentials_filter.h",
+       "platform_util.cc",
+-      "policy/chrome_browser_cloud_management_controller_desktop.cc",
+-      "policy/chrome_browser_cloud_management_controller_desktop.h",
+       "policy/chrome_browser_cloud_management_register_watcher.cc",
+       "policy/chrome_browser_cloud_management_register_watcher.h",
+-      "policy/cloud/user_policy_signin_service.cc",
+-      "policy/cloud/user_policy_signin_service.h",
+       "policy/cloud/user_policy_signin_service_internal.h",
+       "profiles/avatar_menu.cc",
+       "profiles/avatar_menu.h",
+@@ -5150,7 +5129,6 @@ static_library("browser") {
+       "upgrade_detector/upgrade_detector_impl.cc",
+       "upgrade_detector/upgrade_detector_impl.h",
+     ]
+-  } else {  # is_android || is_chromeos
+     sources += [
+       "installable/digital_asset_links/digital_asset_links_handler.cc",
+       "installable/digital_asset_links/digital_asset_links_handler.h",
+@@ -5179,7 +5157,7 @@ static_library("browser") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_android) {
+     sources += [
+       "crash_upload_list/crash_upload_list_crashpad.cc",
+       "crash_upload_list/crash_upload_list_crashpad.h",
+@@ -5282,7 +5260,7 @@ static_library("browser") {
+       sources += [ "background/background_mode_manager_aura.cc" ]
+     }
+   }
+-  if (enable_background_contents) {
++  if (true) {
+     sources += [
+       "background/background_contents_service.cc",
+       "background/background_contents_service.h",
+@@ -5333,7 +5311,7 @@ static_library("browser") {
+       sources += [ "printing/printer_manager_dialog_mac.mm" ]
+     }
+     if (is_linux || is_chromeos) {
+-      sources += [ "printing/printer_manager_dialog_linux.cc" ]
++      sources += [ "" ]
+     }
+     if (is_win || is_mac || is_linux || is_chromeos) {
+       sources += [
+@@ -6040,7 +6018,7 @@ static_library("browser") {
+     }
+   }
+ 
+-  if (enable_session_service) {
++  if (true) {
+     sources += [
+       "sessions/session_restore.cc",
+       "sessions/session_restore.h",
+@@ -6407,7 +6385,7 @@ grit("resources") {
+     }
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_android) {
+     deps += [
+       "//chrome/browser/resources/discards:discards_resources_gen",
+       "//chrome/browser/resources/gaia_auth_host:modulize",
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -583,7 +583,7 @@ static_library("ui") {
+   allow_circular_includes_from +=
+       [ "//chrome/browser/ui/webui/bluetooth_internals" ]
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_android) {
+     deps += [ "//chrome/browser/ui/webui/discards:mojo_bindings" ]
+   }
+ 
+@@ -818,8 +818,6 @@ static_library("ui") {
+       "//services/device/public/mojom:usb",
+       "//ui/android",
+     ]
+-  } else {
+-    # !is_android
+     sources += [
+       "app_icon_loader.cc",
+       "app_icon_loader.h",
+@@ -830,6 +828,8 @@ static_library("ui") {
+       "apps/chrome_app_window_client.h",
+       "apps/directory_access_confirmation_dialog.cc",
+       "apps/directory_access_confirmation_dialog.h",
++      "aura/native_window_tracker_aura.cc",
++      "aura/native_window_tracker_aura.h",
+       "blocked_content/framebust_block_tab_helper.cc",
+       "blocked_content/framebust_block_tab_helper.h",
+       "blocked_content/popunder_preventer.cc",
+@@ -884,7 +884,6 @@ static_library("ui") {
+       "browser_location_bar_model_delegate.h",
+       "browser_navigator.cc",
+       "browser_navigator.h",
+-      "browser_otr_state.cc",
+       "browser_otr_state.h",
+       "browser_tab_restorer.cc",
+       "browser_tab_strip_model_delegate.cc",
+@@ -999,12 +998,6 @@ static_library("ui") {
+       "global_media_controls/presentation_request_notification_item.h",
+       "global_media_controls/presentation_request_notification_provider.cc",
+       "global_media_controls/presentation_request_notification_provider.h",
+-      "hats/hats_helper.cc",
+-      "hats/hats_helper.h",
+-      "hats/hats_service.cc",
+-      "hats/hats_service.h",
+-      "hats/hats_service_factory.cc",
+-      "hats/hats_service_factory.h",
+       "hats/hats_survey_status_checker.cc",
+       "hats/hats_survey_status_checker.h",
+       "hid/hid_chooser.cc",
+@@ -1147,8 +1140,6 @@ static_library("ui") {
+       "singleton_tabs.h",
+       "startup/automation_infobar_delegate.cc",
+       "startup/automation_infobar_delegate.h",
+-      "startup/google_api_keys_infobar_delegate.cc",
+-      "startup/google_api_keys_infobar_delegate.h",
+       "startup/launch_mode_recorder.cc",
+       "startup/launch_mode_recorder.h",
+       "startup/obsolete_system_infobar_delegate.cc",
+@@ -1227,10 +1218,6 @@ static_library("ui") {
+       "tabs/tab_types.h",
+       "tabs/tab_utils.cc",
+       "tabs/tab_utils.h",
+-      "task_manager/task_manager_columns.cc",
+-      "task_manager/task_manager_columns.h",
+-      "task_manager/task_manager_table_model.cc",
+-      "task_manager/task_manager_table_model.h",
+       "thumbnails/thumbnail_capture_driver.cc",
+       "thumbnails/thumbnail_capture_driver.h",
+       "thumbnails/thumbnail_image.cc",
+@@ -1416,8 +1403,6 @@ static_library("ui") {
+       "webui/settings/extension_control_handler.h",
+       "webui/settings/font_handler.cc",
+       "webui/settings/font_handler.h",
+-      "webui/settings/hats_handler.cc",
+-      "webui/settings/hats_handler.h",
+       "webui/settings/import_data_handler.cc",
+       "webui/settings/import_data_handler.h",
+       "webui/settings/languages_handler.cc",
+@@ -1496,6 +1481,7 @@ static_library("ui") {
+       "webui/util/image_util.h",
+       "webui/web_footer_experiment_ui.cc",
+       "webui/web_footer_experiment_ui.h",
++      "window_sizer/window_sizer_aura.cc",
+       "window_sizer/window_sizer.cc",
+       "window_sizer/window_sizer.h",
+       "zoom/chrome_zoom_level_otr_delegate.cc",
+@@ -1513,7 +1499,6 @@ static_library("ui") {
+       "//chrome/browser/profile_resetter:profile_reset_report_proto",
+       "//chrome/browser/promo_browser_command:mojo_bindings",
+       "//chrome/browser/resource_coordinator:tab_metrics_event_proto",
+-      "//chrome/browser/resource_coordinator/tab_ranker",
+       "//chrome/browser/safe_browsing:advanced_protection",
+       "//chrome/browser/search/task_module:mojo_bindings",
+       "//chrome/browser/ui/color:color_headers",
+@@ -2736,7 +2721,7 @@ static_library("ui") {
+     ]
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_android) {
+     sources += [
+       "autofill/payments/virtual_card_selection_dialog_controller.h",
+       "autofill/payments/virtual_card_selection_dialog_controller_impl.cc",
+@@ -2771,7 +2756,6 @@ static_library("ui") {
+       "views/autofill/payments/webauthn_dialog_view_impl.h",
+       "views/close_bubble_on_tab_activation_helper.cc",
+       "views/close_bubble_on_tab_activation_helper.h",
+-      "views/external_protocol_dialog.cc",
+       "views/external_protocol_dialog.h",
+       "views/hats/hats_bubble_view.cc",
+       "views/hats/hats_bubble_view.h",
+@@ -2787,10 +2771,6 @@ static_library("ui") {
+       "views/profiles/profile_menu_view_base.h",
+       "views/profiles/signin_view_controller_delegate_views.cc",
+       "views/profiles/signin_view_controller_delegate_views.h",
+-      "webui/discards/discards_ui.cc",
+-      "webui/discards/discards_ui.h",
+-      "webui/discards/graph_dump_impl.cc",
+-      "webui/discards/graph_dump_impl.h",
+       "webui/discards/site_data_provider_impl.cc",
+       "webui/discards/site_data_provider_impl.h",
+       "webui/signin/inline_login_handler.cc",
+@@ -2807,7 +2787,7 @@ static_library("ui") {
+     deps += [ "//ui/webui" ]
+   }
+ 
+-  if (is_win || is_mac || is_linux) {
++  if (is_win || is_mac || is_linux || is_android) {
+     sources += [
+       "bookmarks/bookmark_bubble_sign_in_delegate.cc",
+       "bookmarks/bookmark_bubble_sign_in_delegate.h",
+@@ -2824,8 +2804,6 @@ static_library("ui") {
+       "sync/one_click_signin_links_delegate_impl.h",
+       "user_manager.cc",
+       "user_manager.h",
+-      "views/profiles/badged_profile_photo.cc",
+-      "views/profiles/badged_profile_photo.h",
+       "views/profiles/profile_picker_view.cc",
+       "views/profiles/profile_picker_view.h",
+       "views/profiles/profile_picker_view_sync_delegate.cc",
+@@ -3225,7 +3203,7 @@ static_library("ui") {
+     # to fail on this variant. Since this target is only referenced (but not
+     # compiled) on this variant, it's okay to add this "incorrect" dependency
+     # to Cast Linux builds so that `gn check` passes.
+-    if (toolkit_views || (is_chromecast && (is_linux || is_chromeos))) {
++    if (toolkit_views || (is_chromecast && (is_linux || is_chromeos)) || is_android) {
+       public_deps += [
+         "//ui/views",
+         "//ui/views/controls/webview",
+@@ -3233,14 +3211,11 @@ static_library("ui") {
+     }
+   }
+ 
+-  if (is_linux) {
++  if (is_linux || is_android) {
+     sources += [
+       "views/apps/chrome_app_window_client_views_linux.cc",
+       "views/first_run_dialog.cc",
+       "views/first_run_dialog.h",
+-      "views/frame/browser_desktop_window_tree_host.h",
+-      "views/frame/desktop_browser_frame_aura_linux.cc",
+-      "views/frame/desktop_browser_frame_aura_linux.h",
+       "views/status_icons/status_icon_button_linux.cc",
+       "views/status_icons/status_icon_button_linux.h",
+       "views/status_icons/status_icon_linux_wrapper.cc",
+@@ -3250,10 +3225,6 @@ static_library("ui") {
+       "webui/settings_utils_linux.cc",
+     ]
+     deps += [
+-      "//ui/base:wm_role_names",
+-      "//ui/base/ime",
+-      "//ui/events:dom_keycode_converter",
+-      "//ui/platform_window",
+     ]
+ 
+     if (use_dbus) {
+@@ -3327,7 +3298,7 @@ static_library("ui") {
+     }
+   }
+ 
+-  if (toolkit_views) {
++  if (true) {
+     sources += [
+       "autofill/address_profiles/save_address_profile_bubble_controller.cc",
+       "autofill/address_profiles/save_address_profile_bubble_controller.h",
+@@ -3366,6 +3337,7 @@ static_library("ui") {
+       # This test header is included because it contains forward declarations
+       # needed for "friend" statements for use in tests.
+       "translate/translate_bubble_test_utils.h",
++      "views/accelerator_utils_aura.cc",
+       "views/accessibility/caption_bubble.cc",
+       "views/accessibility/caption_bubble.h",
+       "views/accessibility/caption_bubble_controller_views.cc",
+@@ -3406,12 +3378,8 @@ static_library("ui") {
+       "views/autofill/autofill_bubble_handler_impl.h",
+       "views/autofill/autofill_popup_base_view.cc",
+       "views/autofill/autofill_popup_base_view.h",
+-      "views/autofill/autofill_popup_view_native_views.cc",
+-      "views/autofill/autofill_popup_view_native_views.h",
+       "views/autofill/autofill_popup_view_utils.cc",
+       "views/autofill/autofill_popup_view_utils.h",
+-      "views/autofill/payments/card_unmask_prompt_views.cc",
+-      "views/autofill/payments/card_unmask_prompt_views.h",
+       "views/autofill/payments/dialog_view_ids.h",
+       "views/autofill/payments/local_card_migration_bubble_views.cc",
+       "views/autofill/payments/local_card_migration_bubble_views.h",
+@@ -3470,8 +3438,6 @@ static_library("ui") {
+       "views/bulleted_label_list_view.h",
+       "views/certificate_selector.cc",
+       "views/certificate_selector.h",
+-      "views/chrome_browser_main_extra_parts_views.cc",
+-      "views/chrome_browser_main_extra_parts_views.h",
+       "views/chrome_constrained_window_views_client.cc",
+       "views/chrome_constrained_window_views_client.h",
+       "views/chrome_layout_provider.cc",
+@@ -3522,6 +3488,7 @@ static_library("ui") {
+       "views/download/download_shelf_view.cc",
+       "views/download/download_shelf_view.h",
+       "views/download/download_started_animation_views.cc",
++      "views/dropdown_bar_host_aura.cc",
+       "views/dropdown_bar_host.cc",
+       "views/dropdown_bar_host.h",
+       "views/dropdown_bar_host_delegate.h",
+@@ -3562,8 +3529,6 @@ static_library("ui") {
+       "views/find_bar_view.h",
+       "views/flying_indicator.cc",
+       "views/flying_indicator.h",
+-      "views/folder_upload_confirmation_view.cc",
+-      "views/folder_upload_confirmation_view.h",
+       "views/frame/app_menu_button.cc",
+       "views/frame/app_menu_button.h",
+       "views/frame/app_menu_button_observer.h",
+@@ -3571,6 +3536,7 @@ static_library("ui") {
+       "views/frame/browser_frame.h",
+       "views/frame/browser_non_client_frame_view.cc",
+       "views/frame/browser_non_client_frame_view.h",
++      "views/frame/browser_non_client_frame_view_factory_views.cc",
+       "views/frame/browser_root_view.cc",
+       "views/frame/browser_root_view.h",
+       "views/frame/browser_view.cc",
+@@ -3583,12 +3549,15 @@ static_library("ui") {
+       "views/frame/contents_layout_manager.h",
+       "views/frame/contents_web_view.cc",
+       "views/frame/contents_web_view.h",
++      "views/frame/desktop_browser_frame_aura.cc",
++      "views/frame/desktop_browser_frame_aura.h",
+       "views/frame/immersive_mode_controller.cc",
+       "views/frame/immersive_mode_controller.h",
+       "views/frame/immersive_mode_controller_factory_views.cc",
+       "views/frame/immersive_mode_controller_stub.cc",
+       "views/frame/immersive_mode_controller_stub.h",
+       "views/frame/native_browser_frame.h",
++      "views/frame/native_browser_frame_factory_aurax11.cc",
+       "views/frame/native_browser_frame_factory.cc",
+       "views/frame/native_browser_frame_factory.h",
+       "views/frame/system_menu_model_builder.cc",
+@@ -3644,8 +3613,6 @@ static_library("ui") {
+       "views/importer/import_lock_dialog_view.h",
+       "views/infobars/alternate_nav_infobar_view.cc",
+       "views/infobars/alternate_nav_infobar_view.h",
+-      "views/infobars/confirm_infobar.cc",
+-      "views/infobars/confirm_infobar.h",
+       "views/infobars/infobar_container_view.cc",
+       "views/infobars/infobar_container_view.h",
+       "views/infobars/infobar_view.cc",
+@@ -3709,12 +3676,8 @@ static_library("ui") {
+       "views/media_router/cast_dialog_view.h",
+       "views/media_router/cast_toolbar_button.cc",
+       "views/media_router/cast_toolbar_button.h",
+-      "views/media_router/cloud_services_dialog_view.cc",
+-      "views/media_router/cloud_services_dialog_view.h",
+       "views/media_router/media_remoting_dialog_view.cc",
+       "views/media_router/media_remoting_dialog_view.h",
+-      "views/media_router/media_router_dialog_controller_views.cc",
+-      "views/media_router/media_router_dialog_controller_views.h",
+       "views/media_router/presentation_receiver_window_factory.cc",
+       "views/media_router/presentation_receiver_window_frame.cc",
+       "views/media_router/presentation_receiver_window_frame.h",
+@@ -3722,14 +3685,8 @@ static_library("ui") {
+       "views/media_router/presentation_receiver_window_view.h",
+       "views/media_router/web_contents_display_observer_view.cc",
+       "views/media_router/web_contents_display_observer_view.h",
+-      "views/message_box_dialog.cc",
+-      "views/message_box_dialog.h",
+       "views/native_file_system/native_file_system_access_icon_view.cc",
+       "views/native_file_system/native_file_system_access_icon_view.h",
+-      "views/native_file_system/native_file_system_permission_view.cc",
+-      "views/native_file_system/native_file_system_permission_view.h",
+-      "views/native_file_system/native_file_system_restricted_directory_dialog_view.cc",
+-      "views/native_file_system/native_file_system_restricted_directory_dialog_view.h",
+       "views/native_file_system/native_file_system_ui_helpers.cc",
+       "views/native_file_system/native_file_system_ui_helpers.h",
+       "views/native_file_system/native_file_system_usage_bubble_view.cc",
+@@ -3762,8 +3719,6 @@ static_library("ui") {
+       "views/overlay/back_to_tab_image_button.h",
+       "views/overlay/close_image_button.cc",
+       "views/overlay/close_image_button.h",
+-      "views/overlay/overlay_window_views.cc",
+-      "views/overlay/overlay_window_views.h",
+       "views/overlay/playback_image_button.cc",
+       "views/overlay/playback_image_button.h",
+       "views/overlay/resize_handle_button.cc",
+@@ -3800,8 +3755,6 @@ static_library("ui") {
+       "views/page_info/permission_selector_row.cc",
+       "views/page_info/permission_selector_row.h",
+       "views/page_info/permission_selector_row_observer.h",
+-      "views/page_info/safety_tip_page_info_bubble_view.cc",
+-      "views/page_info/safety_tip_page_info_bubble_view.h",
+       "views/passwords/account_chooser_dialog_view.cc",
+       "views/passwords/account_chooser_dialog_view.h",
+       "views/passwords/auto_signin_first_run_dialog_view.cc",
+@@ -3820,8 +3773,6 @@ static_library("ui") {
+       "views/passwords/password_bubble_view_base.h",
+       "views/passwords/password_generation_confirmation_view.cc",
+       "views/passwords/password_generation_confirmation_view.h",
+-      "views/passwords/password_generation_popup_view_views.cc",
+-      "views/passwords/password_generation_popup_view_views.h",
+       "views/passwords/password_items_view.cc",
+       "views/passwords/password_items_view.h",
+       "views/passwords/password_save_unsynced_credentials_locally_view.cc",
+@@ -3883,8 +3834,6 @@ static_library("ui") {
+       "views/permission_bubble/chooser_bubble_ui.cc",
+       "views/permission_bubble/permission_prompt_bubble_view.cc",
+       "views/permission_bubble/permission_prompt_bubble_view.h",
+-      "views/permission_bubble/permission_prompt_impl.cc",
+-      "views/permission_bubble/permission_prompt_impl.h",
+       "views/permission_bubble/permission_prompt_style.h",
+       "views/profiles/avatar_toolbar_button.cc",
+       "views/profiles/avatar_toolbar_button.h",
+@@ -3928,8 +3877,6 @@ static_library("ui") {
+       "views/sharing/sharing_icon_view.h",
+       "views/side_panel.cc",
+       "views/side_panel.h",
+-      "views/ssl_client_certificate_selector.cc",
+-      "views/ssl_client_certificate_selector.h",
+       "views/status_bubble_views.cc",
+       "views/status_bubble_views.h",
+       "views/storage/storage_pressure_bubble_view.cc",
+@@ -4249,9 +4196,6 @@ static_library("ui") {
+         "views/relaunch_notification/relaunch_recommended_timer.h",
+         "views/relaunch_notification/relaunch_required_dialog_view.cc",
+         "views/relaunch_notification/relaunch_required_dialog_view.h",
+-        "views/screen_capture_notification_ui_views.cc",
+-        "views/sync/dice_bubble_sync_promo_view.cc",
+-        "views/sync/dice_bubble_sync_promo_view.h",
+         "views/sync/dice_signin_button_view.cc",
+         "views/sync/dice_signin_button_view.h",
+       ]
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -516,7 +516,7 @@ source_set("browser_sources") {
+     sources += [ "zygote_host/zygote_host_linux.h" ]
+   }
+ 
+-  if (!is_android) {
++  if (is_android) {
+     sources += [
+       "authenticator_request_client_delegate.cc",
+       "authenticator_request_client_delegate.h",
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -2182,7 +2182,7 @@ source_set("browser") {
+     ]
+   }
+ 
+-  if (!is_fuchsia && !is_android) {
++  if (!is_fuchsia && is_android) {
+     deps += [ "//content/browser/devtools:devtools_resources" ]
+   }
+ 
+@@ -2579,7 +2579,7 @@ source_set("browser") {
+     }
+     defines += [ "APPCACHE_USE_SIMPLE_CACHE" ]
+     libs += [ "jnigraphics" ]
+-  } else {
++
+     # Not Android.
+     sources += [
+       # The WebAuthn devtools protocol API is not supported in Android yet.
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -394,6 +394,8 @@ static_library("renderer") {
+       "chromeos_merge_session_loader_throttle.cc",
+       "chromeos_merge_session_loader_throttle.h",
+     ]
++
++    deps += [ "//chrome/common/search:generate_chrome_colors_info" ]
+   }
+ 
+   if (is_chromeos) {
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -402,7 +402,6 @@ static_library("common") {
+       "media/chrome_media_drm_bridge_client.cc",
+       "media/chrome_media_drm_bridge_client.h",
+     ]
+-  } else {
+     # Non-Android.
+     public_deps += [ "//chrome/common/importer" ]
+   }
+@@ -718,7 +717,6 @@ mojom("mojo_bindings") {
+ 
+   if (is_android) {
+     sources += [ "sandbox_status_extension_android.mojom" ]
+-  } else {
+     sources += [ "caption.mojom" ]
+   }
+ 
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -15,6 +15,8 @@ import("//rlz/buildflags/buildflags.gni"
+ 
+ assert(enable_extensions)
+ 
++set_sources_assignment_filter([])
++
+ static_library("extensions") {
+   sources = [
+     "active_install_data.cc",
+@@ -611,6 +613,8 @@ static_library("extensions") {
+     "forced_extensions/install_stage_tracker_factory.h",
+     "global_shortcut_listener.cc",
+     "global_shortcut_listener.h",
++    "global_shortcut_listener_ozone.cc",
++    "global_shortcut_listener_ozone.h",
+     "install_gate.h",
+     "install_observer.cc",
+     "install_observer.h",
+@@ -679,6 +683,8 @@ static_library("extensions") {
+     "sync_bundle.cc",
+     "sync_bundle.h",
+     "system_display/display_info_provider.h",
++    "system_display/display_info_provider_aura.cc",
++    "system_display/display_info_provider_aura.h",
+     "tab_helper.cc",
+     "tab_helper.h",
+     "theme_installed_infobar_delegate.cc",
+@@ -1112,10 +1118,8 @@ static_library("extensions") {
+       "//components/enterprise",
+       "//components/keep_alive_registry",
+     ]
+-    if (is_linux || is_chromeos) {
++    if (is_linux || is_chromeos || is_android) {
+       sources += [
+-        "api/enterprise_reporting_private/device_info_fetcher_linux.cc",
+-        "api/enterprise_reporting_private/device_info_fetcher_linux.h",
+         "api/image_writer_private/removable_storage_provider_linux.cc",
+       ]
+     }
+--- a/chrome/browser/devtools/BUILD.gn
++++ b/chrome/browser/devtools/BUILD.gn
+@@ -4,13 +4,13 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-if (!is_android) {
++if (is_android) {
+   import("//build/config/features.gni")
+   import("//chrome/common/features.gni")
+   import("//tools/grit/grit_rule.gni")
+ }
+ 
+-if (!is_android) {
++if (is_android) {
+   _inspector_protocol = "//third_party/inspector_protocol"
+   import("$_inspector_protocol/inspector_protocol.gni")
+ 
+@@ -108,7 +108,7 @@ static_library("devtools") {
+     "//ui/events:dom_keycode_converter",
+   ]
+ 
+-  if (!is_android) {
++  if (is_android) {
+     deps += [
+       "//chrome:extra_resources",
+       "//chrome:resources",
+@@ -189,19 +189,13 @@ static_library("devtools") {
+       "url_constants.cc",
+       "url_constants.h",
+     ]
+-    if (enable_service_discovery) {
+-      sources += [
+-        "device/cast_device_provider.cc",
+-        "device/cast_device_provider.h",
+-      ]
+-    }
+   }
+   if (is_mac) {
+     sources += [ "devtools_dock_tile_mac.mm" ]
+   } else {
+     sources += [ "devtools_dock_tile.cc" ]
+   }
+-  if (!is_android) {
++  if (is_android) {
+     deps += [
+       ":protocol_generated_sources",
+       "//components/subresource_filter/content/browser:browser",
+--- a/chrome/common/extensions/api/api_sources.gni
++++ b/chrome/common/extensions/api/api_sources.gni
+@@ -72,7 +72,7 @@ schema_sources_ = [
+   "windows.json",
+ ]
+ 
+-if (!is_android) {
++if (is_android) {
+   schema_sources_ += [ "processes.idl" ]
+ }
+ 
+--- a/ui/message_center/BUILD.gn
++++ b/ui/message_center/BUILD.gn
+@@ -35,7 +35,7 @@ component("message_center") {
+ 
+   defines = [ "MESSAGE_CENTER_IMPLEMENTATION" ]
+ 
+-  if (enable_message_center) {
++  if (true) {
+     deps += [
+       ":message_center_vector_icons",
+       "//base:i18n",
+@@ -87,7 +87,7 @@ component("message_center") {
+       ]
+     }
+ 
+-    if (toolkit_views) {
++    if (true) {
+       sources += [
+         "views/desktop_message_popup_collection.cc",
+         "views/desktop_message_popup_collection.h",
+--- a/components/bookmarks/browser/BUILD.gn
++++ b/components/bookmarks/browser/BUILD.gn
+@@ -79,7 +79,7 @@ static_library("browser") {
+     all_dependent_configs = [ "//ui/views:flags" ]
+   }
+ 
+-  if (toolkit_views && !is_mac) {
++  if (!is_mac) {
+     sources += [ "bookmark_node_data_views.cc" ]
+   }
+ 
+--- a/ui/gfx/animation/BUILD.gn
++++ b/ui/gfx/animation/BUILD.gn
+@@ -52,7 +52,7 @@ component("animation") {
+     ]
+   }
+ 
+-  if (!is_android) {
++  if (is_android) {
+     sources += [
+       "throb_animation.cc",
+       "throb_animation.h",
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -128,7 +128,7 @@ template("chrome_extra_paks") {
+       sources += invoker.additional_paks
+     }
+ 
+-    if (!is_android) {
++    if (is_android) {
+       # New paks should be added here by default.
+       sources += [
+         "$root_gen_dir/chrome/bookmarks_resources.pak",
+@@ -237,7 +237,7 @@ template("chrome_extra_paks") {
+       sources += [ "$root_gen_dir/chrome/webui_js_exception_resources.pak" ]
+       deps += [ "//chrome/browser/resources/webui_js_exception:webui_js_exception_resources" ]
+     }
+-    if (!is_android && !is_chromeos) {
++    if (is_android && !is_chromeos) {
+       sources += [
+         "$root_gen_dir/chrome/profile_picker_resources.pak",
+         "$root_gen_dir/chrome/welcome_resources.pak",
+--- a/content/browser/devtools/BUILD.gn
++++ b/content/browser/devtools/BUILD.gn
+@@ -7,7 +7,7 @@ import("//third_party/protobuf/proto_lib
+ import("//tools/grit/grit_rule.gni")
+ 
+ # Android and Fuchsia do not support DevTools front-end.
+-if (!is_android && !is_fuchsia) {
++if (is_android && !is_fuchsia) {
+   grit("devtools_resources") {
+     source = "$root_gen_dir/devtools/devtools_resources.grd"
+ 
+--- a/build/config/locales.gni
++++ b/build/config/locales.gni
+@@ -173,7 +173,7 @@ android_bundle_only_locales = [
+ ]
+ 
+ if (is_android) {
+-  locales = all_chrome_locales
++  locales = all_chrome_locales - android_bundle_only_locales
+ 
+   # Android doesn't ship all locales on KitKat in order to save space
+   # (but webview does). http://crbug.com/369218
+@@ -195,14 +195,12 @@ if (is_android) {
+   android_bundle_locales_as_resources -= [
+     "en-rUS",
+     "es-r419",
+-    "sr-rLatn",
+     "fil",
+     "he",
+     "id",
+   ]
+   android_bundle_locales_as_resources += [
+     "es-rUS",
+-    "b+sr+Latn",
+     "in",
+     "iw",
+     "tl",
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -1749,7 +1749,6 @@ if (current_toolchain == default_toolcha
+         }
+       }
+       if (!dfmify_dev_ui || !_is_bundle_module) {
+-        additional_extra_paks += [ "$root_gen_dir/chrome/dev_ui_resources.pak" ]
+         deps += [ "//chrome/browser/resources:dev_ui_paks" ]
+       }
+ 
+--- a/ui/gfx/BUILD.gn
++++ b/ui/gfx/BUILD.gn
+@@ -401,8 +401,6 @@ component("gfx") {
+ 
+   if ((!use_aura && !toolkit_views) || is_ios) {
+     sources -= [
+-      "nine_image_painter.cc",
+-      "nine_image_painter.h",
+     ]
+   }
+ 
+--- a/components/performance_manager/BUILD.gn
++++ b/components/performance_manager/BUILD.gn
+@@ -168,7 +168,7 @@ static_library("performance_manager") {
+     "//url",
+   ]
+ 
+-  if (!is_android) {
++  if (is_android) {
+     sources += [
+       "decorators/site_data_recorder.cc",
+       "persistence/site_data/exponential_moving_average.cc",
+--- a/media/mojo/mojom/BUILD.gn
++++ b/media/mojo/mojom/BUILD.gn
+@@ -51,7 +51,7 @@ mojom("mojom") {
+ 
+   if (is_android) {
+     sources += [ "android_overlay.mojom" ]
+-  } else {
++
+     sources += [ "speech_recognition_service.mojom" ]
+   }
+ 
+--- a/components/autofill/core/browser/BUILD.gn
++++ b/components/autofill/core/browser/BUILD.gn
+@@ -424,7 +424,7 @@ static_library("browser") {
+     deps += [ "//third_party/blink/public/common" ]
+   }
+ 
+-  if (!is_android && !is_ios) {
++  if (is_android && !is_ios) {
+     sources += [
+       "payments/local_card_migration_manager.cc",
+       "payments/local_card_migration_manager.h",
+--- a/ui/webui/resources/BUILD.gn
++++ b/ui/webui/resources/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//third_party/closure_compiler/compile_js.gni")
+ import("//ui/webui/resources/tools/generate_grd.gni")
+ 
+-include_polymer = !is_android && !is_ios
++include_polymer = is_android && !is_ios
+ 
+ generate_grd("build_grd") {
+   grd_prefix = "webui_generated"
+@@ -59,7 +59,7 @@ group("closure_compile") {
+     "js:closure_compile_modules",
+   ]
+ 
+-  if (!is_android) {
++  if (is_android) {
+     deps += [
+       "cr_components:closure_compile",
+       "cr_elements:closure_compile",
+@@ -74,7 +74,7 @@ group("modulize") {
+     "js/cr/ui:modulize",
+   ]
+ 
+-  if (!is_android) {
++  if (is_android) {
+     public_deps += [
+       "cr_components:polymer3_elements",
+       "cr_elements:polymer3_elements",
+--- a/device/fido/BUILD.gn
++++ b/device/fido/BUILD.gn
+@@ -72,7 +72,7 @@ component("fido") {
+   ]
+ 
+   # Android implementation of FIDO is delegated to GMSCore.
+-  if (!is_android) {
++  if (is_android) {
+     sources += [
+       "aoa/android_accessory_device.cc",
+       "aoa/android_accessory_device.h",
+--- a/chrome/browser/nearby_sharing/BUILD.gn
++++ b/chrome/browser/nearby_sharing/BUILD.gn
+@@ -10,8 +10,6 @@ source_set("share_target") {
+     "attachment.h",
+     "file_attachment.cc",
+     "file_attachment.h",
+-    "share_target.cc",
+-    "share_target.h",
+     "text_attachment.cc",
+     "text_attachment.h",
+   ]
+--- a/components/enterprise/BUILD.gn
++++ b/components/enterprise/BUILD.gn
+@@ -52,7 +52,7 @@ static_library("enterprise") {
+     ]
+   }
+ 
+-  if (!is_android && !is_chromeos) {
++  if (is_android && !is_chromeos) {
+     sources += [
+       "browser/controller/chrome_browser_cloud_management_controller.cc",
+       "browser/controller/chrome_browser_cloud_management_controller.h",
+--- a/components/media_router/common/BUILD.gn
++++ b/components/media_router/common/BUILD.gn
+@@ -33,7 +33,7 @@ static_library("common") {
+ 
+   deps = []
+ 
+-  if (!is_android) {
++  if (is_android) {
+     sources += [
+       "discovery/media_sink_service_base.cc",
+       "discovery/media_sink_service_base.h",
+--- a/components/media_router/browser/BUILD.gn
++++ b/components/media_router/browser/BUILD.gn
+@@ -81,7 +81,7 @@ source_set("browser") {
+       "android/media_router_dialog_controller_android.h",
+     ]
+     deps += [ "android:jni_headers" ]
+-  } else {
++
+     sources += [
+       "logger_impl.cc",
+       "logger_impl.h",
+--- a/chrome/browser/ui/webui/discards/BUILD.gn
++++ b/chrome/browser/ui/webui/discards/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//mojo/public/tools/bindings/mojom.gni")
+ 
+-if (is_win || is_mac || is_linux || is_chromeos) {
++if (is_win || is_mac || is_linux || is_chromeos || is_android) {
+   mojom("mojo_bindings") {
+     sources = [
+       "discards.mojom",
+--- a/chrome/common/importer/BUILD.gn
++++ b/chrome/common/importer/BUILD.gn
+@@ -78,8 +78,6 @@ source_set("importer") {
+   sources = [
+     "firefox_importer_utils.cc",
+     "firefox_importer_utils.h",
+-    "imported_bookmark_entry.cc",
+-    "imported_bookmark_entry.h",
+     "importer_autofill_form_data_entry.cc",
+     "importer_autofill_form_data_entry.h",
+     "importer_bridge.cc",
+--- a/extensions/browser/api/system_cpu/BUILD.gn
++++ b/extensions/browser/api/system_cpu/BUILD.gn
+@@ -25,7 +25,7 @@ source_set("system_cpu") {
+     sources += [ "cpu_info_provider_mac.cc" ]
+   }
+ 
+-  if (is_linux || is_chromeos) {
++  if (is_linux || is_chromeos || is_android) {
+     sources += [ "cpu_info_provider_linux.cc" ]
+   }
+ 
+--- a/chrome/browser/apps/platform_apps/api/music_manager_private/BUILD.gn
++++ b/chrome/browser/apps/platform_apps/api/music_manager_private/BUILD.gn
+@@ -32,7 +32,7 @@ source_set("music_manager_private") {
+ 
+   if (is_chromeos) {
+     sources += [ "device_id_chromeos.cc" ]
+-  } else if (is_linux) {
++  } else if (is_linux || is_android) {
+     sources += [ "device_id_linux.cc" ]
+   } else if (is_mac) {
+     sources += [ "device_id_mac.cc" ]
+--- a/chrome/browser/resources/BUILD.gn
++++ b/chrome/browser/resources/BUILD.gn
+@@ -108,7 +108,7 @@ if (enable_js_type_check) {
+   }
+ }
+ 
+-if (!is_android) {
++if (is_android) {
+   grit("component_extension_resources") {
+     source = "component_extension_resources.grd"
+ 
+--- a/ui/webui/resources/js/BUILD.gn
++++ b/ui/webui/resources/js/BUILD.gn
+@@ -11,7 +11,7 @@ preprocess_folder = "$root_gen_dir/ui/we
+ preprocess_gen_manifest = "preprocessed_gen_manifest.json"
+ preprocess_src_manifest = "preprocessed_src_manifest.json"
+ 
+-include_polymer = !is_android && !is_ios
++include_polymer = is_android && !is_ios
+ 
+ generate_grd("build_grdp") {
+   grd_prefix = "webui_js"
+--- a/ui/webui/resources/css/BUILD.gn
++++ b/ui/webui/resources/css/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//tools/grit/preprocess_grit.gni")
+ import("//ui/webui/resources/tools/generate_grd.gni")
+ 
+-include_polymer = !is_android && !is_ios
++include_polymer = is_android && !is_ios
+ 
+ preprocess_folder = "$root_gen_dir/ui/webui/resources/preprocessed/css"
+ preprocess_src_manifest = "preprocessed_src_manifest.json"
+--- a/ui/webui/resources/html/BUILD.gn
++++ b/ui/webui/resources/html/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/generate_grd.gni")
+ 
+-include_polymer = !is_android && !is_ios
++include_polymer = is_android && !is_ios
+ 
+ generate_grd("build_grdp") {
+   grd_prefix = "webui_html"
+--- a/ui/webui/resources/js/cr/ui/BUILD.gn
++++ b/ui/webui/resources/js/cr/ui/BUILD.gn
+@@ -96,7 +96,7 @@ preprocess_grit("preprocess_generated")
+     "tree.m.js",
+   ]
+ 
+-  if (!is_android) {
++  if (is_android) {
+     in_files += [
+       "focus_row_behavior.m.js",
+       "focus_without_ink.m.js",
